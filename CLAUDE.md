@@ -91,7 +91,8 @@ Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `pub
 
 **Distribution entry point is `raw.githubusercontent.com`**, not GitHub Pages:
 - Source list URL: `https://raw.githubusercontent.com/doyayaa/aidoku-source-zh-hipmh/gh-pages/index.min.json`
-- Relative `downloadURL` (`sources/zh.hipmh-v1.aix`) resolves against that raw URL → `.../gh-pages/sources/zh.hipmh-v1.aix`; `iconURL` is already absolute so it needs no resolution.
+- `downloadURL` is an **absolute** URL (`https://raw.githubusercontent.com/doyayaa/aidoku-source-zh-hipmh/gh-pages/sources/zh.hipmh-v2.aix`), so source download works regardless of how the source list URL is entered; the `.aix` filename carries the version (`zh.hipmh-v{n}.aix`, mirrors the manifest `version`). `iconURL` is absolute too.
+- On version bump: change `version` in the manifest AND `res/source.json` `info.version`, rebuild, and rename `public/sources/zh.hipmh-v{n}.aix` (a fresh filename also sidesteps raw CDN caching).
 - GitHub Pages is NOT used: the repo's custom domain `doyayaa.online` is deprecated, and `doyayaa.github.io/...` still 301s to it (can't be cleared via API; needs web UI Settings → Pages → Custom domain → Clear if ever re-enabled).
 
 **The manifest MUST be the new `{"name": ..., "sources": [...]}` format** (fields `iconURL`/`downloadURL`/`languages`/`contentRating`/`baseURL`/`minAppVersion`). The old flat-array format (`file`/`icon`/`lang`/`nsfw`) causes Aidoku to label the whole source list "旧版图源" (legacy). Keep `public/` and the `gh-pages` branch in sync. `iconURL` is an absolute remote URL (`https://m.hipmh.com/assets/logo.C1THqItK.png`, the site's logo); `public/icons/zh.hipmh-v1.png` is a legacy local copy no longer referenced.
