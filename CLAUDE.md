@@ -87,7 +87,12 @@ If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/ru
 
 ## Deploy
 
-Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `public/index.json`/`public/index.min.json` (the Aidoku source list). The `gh-pages` branch serves `index.min.json` + `sources/*.aix` + `icons/*.png` and is generated from the `master` `public/` directory. Repo: `doyayaa/aidoku-source-zh-hipmh`.
+Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `public/index.json`/`public/index.min.json` (the Aidoku source list). The `gh-pages` branch carries the same files the app needs and is generated from the `master` `public/` directory. Repo: `doyayaa/aidoku-source-zh-hipmh`.
+
+**Distribution entry point is `raw.githubusercontent.com`**, not GitHub Pages:
+- Source list URL: `https://raw.githubusercontent.com/doyayaa/aidoku-source-zh-hipmh/gh-pages/index.min.json`
+- Relative `downloadURL` (`sources/zh.hipmh-v1.aix`) resolves against that raw URL → `.../gh-pages/sources/zh.hipmh-v1.aix`; `iconURL` is already absolute so it needs no resolution.
+- GitHub Pages is NOT used: the repo's custom domain `doyayaa.online` is deprecated, and `doyayaa.github.io/...` still 301s to it (can't be cleared via API; needs web UI Settings → Pages → Custom domain → Clear if ever re-enabled).
 
 **The manifest MUST be the new `{"name": ..., "sources": [...]}` format** (fields `iconURL`/`downloadURL`/`languages`/`contentRating`/`baseURL`/`minAppVersion`). The old flat-array format (`file`/`icon`/`lang`/`nsfw`) causes Aidoku to label the whole source list "旧版图源" (legacy). Keep `public/` and the `gh-pages` branch in sync. `iconURL` is an absolute remote URL (`https://m.hipmh.com/assets/logo.C1THqItK.png`, the site's logo); `public/icons/zh.hipmh-v1.png` is a legacy local copy no longer referenced.
 
