@@ -23,6 +23,8 @@ rustup target add wasm32-unknown-unknown
 
 Output: `package.aix` — a zip containing `main.wasm` and `res/*`. This is loaded by the Aidoku app. `res/source.json` declares the source metadata (`id: zh.hipmh`, version, listings); `res/filters.json` drives the browse filter UI.
 
+**Packaging gotcha:** the zip is built by `pack.py` (python `zipfile`, forward-slash arcnames), not PowerShell `Compress-Archive`. On Windows, `Compress-Archive` writes entry names like `Payload\main.wasm` (backslash); iOS/macOS ZIPFoundation then extracts one literal `Payload\main.wasm` file instead of a `Payload/` folder, so Aidoku fails to load the source ("解压/解析失败"). The zip MUST contain forward-slash `Payload/*` entries. `build.sh`/`build.ps1` both call `pack.py` after `cargo build`.
+
 `aidoku-test` is declared in `[dev-dependencies]`, but **no tests exist yet** — don't assume a test suite that isn't there.
 
 ## Architecture
