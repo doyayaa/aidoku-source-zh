@@ -126,8 +126,12 @@ impl Source for Hipmh {
 		needs_chapters: bool,
 	) -> Result<Manga> {
 		if needs_details {
-			let manga_page = Url::manga(manga.key.clone()).request()?.html()?;
-			manga_page.update_details(&mut manga)?;
+			let works_url = format!("{}/works/{}", BASE_URL, key_to_works_id(&manga.key));
+			let doc = Request::get(works_url.clone())?
+				.header("Origin", BASE_URL)
+				.html()?;
+			doc.update_details(&mut manga)?;
+			manga.url = Some(works_url);
 		}
 
 		if needs_chapters {
@@ -279,6 +283,13 @@ fn decode_work_id(encoded: &str) -> String {
 fn works_slug_to_key(slug: &str) -> String {
 	let encoded = slug.split('-').next().unwrap_or(slug);
 	decode_work_id(encoded)
+}
+
+/// Convert a manga key (e.g. "m:23475") back to the leading `/works/` ID segment
+/// used in detail-page URLs (base64-encodes to "bToyMzQ3NQ").
+fn key_to_works_id(key: &str) -> String {
+	use base64::{Engine as _, engine::general_purpose::STANDARD};
+	STANDARD.encode(key)
 }
 
 register_source!(

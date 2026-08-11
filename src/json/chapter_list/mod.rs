@@ -1,113 +1,74 @@
 use crate::BASE_URL;
 use aidoku::{
 	Chapter, Result,
-	alloc::{Vec, string::ToString as _, vec},
+	alloc::{Vec, string::ToString as _},
 	error,
 	imports::net::Request,
 	prelude::format,
 };
-use regex::Regex;
-
-fn extract_chapter_number(title: &str) -> Option<f32> {
-	let re1 = Regex::new(r"(?:第\s*)(\d+(?:\.\d+)?)\s*(?:话|話|章|回|卷|册|冊)").ok()?;
-	if let Some(captures) = re1.captures(title)
-		&& let Some(num_match) = captures.get(1)
-		&& let Ok(num) = num_match.as_str().parse::<f32>()
-	{
-		return Some(num);
-	}
-
-	// Try to match pure number at the beginning
-	let re2 = Regex::new(r"^(\d+(?:\.\d+)?)").ok()?;
-	if let Some(captures) = re2.captures(title)
-		&& let Some(num_match) = captures.get(1)
-		&& let Ok(num) = num_match.as_str().parse::<f32>()
-	{
-		return Some(num);
-	}
-
-	None
-}
 
 pub struct ChapterList;
 
 impl ChapterList {
-	pub fn get_chapters(manga_id: &str) -> Result<Vec<Chapter>> {
+	/// Fetch chapters from `https://hipapi1.s3file.top/v1/manga/chapters`.
+	/// The manga key is `m:{numeric_id}`; the API wants the numeric id.
+	pub fn get_chapters(manga_key: &str) -> Result<Vec<Chapter>> {
+		let mid = manga_key.strip_prefix("m:").unwrap_or(manga_key);
 		let mut all_chapters: Vec<Chapter> = Vec::new();
 		let mut page = 1;
 
 		loop {
 			let url = format!(
-				"{}/v2.0/apis/manga/chapterByPage?code={}&page={}&lang=cn&order=asc",
-				BASE_URL, manga_id, page
+				"https://hipapi1.s3file.top/v1/manga/chapters?mid={}&page={}&per_page=50&order=desc",
+				mid, page
 			);
-			let json: serde_json::Value = Request::get(url.clone())?
+			let json: serde_json::Value = Request::get(url)?
 				.header("Origin", BASE_URL)
-				.header("Referer", BASE_URL)
 				.send()?
 				.get_json()?;
 			let data = json
-				.as_object()
-				.ok_or_else(|| error!("Expected JSON object"))?;
-			let data = data
 				.get("data")
-				.and_then(|v| v.as_object())
 				.ok_or_else(|| error!("Expected data object"))?;
-			let is_end = data.get("isEnd").and_then(|v| v.as_i64()).unwrap_or(0);
 			let items = data
 				.get("items")
 				.and_then(|v| v.as_array())
 				.ok_or_else(|| error!("Expected items array"))?;
+			let total_pages = data.get("total_pages").and_then(|v| v.as_i64()).unwrap_or(1);
 
 			for item in items {
 				let item = match item.as_object() {
 					Some(item) => item,
 					None => continue,
 				};
-				let id = item
-					.get("id")
-					.and_then(|v| v.as_i64())
-					.unwrap_or_default()
-					.to_string();
-				let title = item
-					.get("chapterName")
+				let hid = item
+					.get("hid")
 					.and_then(|v| v.as_str())
 					.unwrap_or_default()
 					.to_string();
-				let chapter_or_volume =
-					extract_chapter_number(&title).unwrap_or((all_chapters.len() + 1) as f32);
-				let url = format!("{}/mangaread/{}/{}", BASE_URL, manga_id, id);
+				let title = item
+					.get("title")
+					.and_then(|v| v.as_str())
+					.unwrap_or_default()
+					.to_string();
+				let chapter_number = item
+					.get("chapter_number")
+					.and_then(|v| v.as_f64())
+					.unwrap_or(0.0);
 
-				let (ch, vo) = if title.trim().ends_with('卷') {
-					(-1.0, chapter_or_volume)
-				} else {
-					(chapter_or_volume, -1.0)
-				};
-
-				let scanlator = if vo > -1.0 {
-					"单行本".to_string()
-				} else {
-					"默认".to_string()
-				};
-
-				all_chapters.push(aidoku::Chapter {
-					key: id,
+				all_chapters.push(Chapter {
+					key: hid.clone(),
 					title: Some(title),
-					volume_number: (vo >= 0.0).then_some(vo),
-					chapter_number: (ch >= 0.0).then_some(ch),
-					url: Some(url),
-					scanlators: Some(vec![scanlator]),
+					chapter_number: (chapter_number > 0.0).then_some(chapter_number as f32),
+					url: Some(format!("{}/chapter/go?hid={}&m={}", BASE_URL, hid, mid)),
 					..Default::default()
 				});
 			}
 
-			if is_end == 1 {
+			if page >= total_pages as i32 {
 				break;
 			}
 			page += 1;
 		}
-
-		all_chapters.reverse();
 
 		Ok(all_chapters)
 	}

@@ -307,9 +307,6 @@ pub enum Url {
 		query: String,
 		page: i32,
 	},
-	Manga {
-		id: String,
-	},
 }
 
 impl Url {
@@ -388,10 +385,6 @@ impl Url {
 			page,
 		})
 	}
-
-	pub fn manga(id: String) -> Self {
-		Self::Manga { id }
-	}
 }
 
 impl Display for Url {
@@ -412,9 +405,6 @@ impl Display for Url {
 			}
 			Url::Search { query: _, page: _ } => {
 				write!(f, "{}/v2.0/apis/manga/ssearch", BASE_URL)
-			}
-			Url::Manga { id } => {
-				write!(f, "{}/manga/{}", BASE_URL, id)
 			}
 		}
 	}
