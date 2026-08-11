@@ -27,13 +27,13 @@ Output: `package.aix` — a zip containing `main.wasm` and `res/*`. This is load
 
 ## Architecture
 
-Implements the Aidoku trait-based API (Aidoku 0.7+), registered via `register_source!` at the bottom of `src/lib.rs`. The `Hipmh` struct implements `Source` (search, manga update, page list), `ImageRequestProvider` (adds `Referer` header), `DeepLinkHandler` (URL parsing), and `ListingProvider` (rankings).
+Implements the Aidoku trait-based API (Aidoku 0.7+), registered via `register_source!` at the bottom of `src/lib.rs`. The `Hipmh` struct implements `Source` (search, manga update, page list), `ImageRequestProvider` (adds `Referer` header), `DeepLinkHandler` (URL parsing), and `ListingProvider` (catalog via the `/v1/mangas` JSON API).
 
 ```
 src/
-├── lib.rs                    # Source traits, URL dispatch, deep links, BASE_URL
+├── lib.rs                    # Source traits, URL dispatch, deep links, BASE_URL, /v1/mangas listing
 ├── net/mod.rs                # URL construction, filter parsing, GENRE_OPTIONS/GENRE_IDS arrays
-├── html/mod.rs               # HTML scraper: manga detail + ranking page selectors
+├── html/mod.rs               # HTML scraper: manga detail parsing
 └── json/
     ├── chapter_list/mod.rs   # Chapter list (paginated asc, then reversed)
     └── page_list.rs          # Page images + scan decryption + anti-bot headers
@@ -43,17 +43,22 @@ src/
 
 | Purpose | Method | Path | Notes |
 |---------|--------|------|-------|
-| Browse/Filter | GET | `/apis/c/index?&order=last_date&genre={g}&area={a}&audience={au}&series_status={s}&pn={p}` | Returns JSON |
-| Search | POST | `/v2.0/apis/manga/ssearch` | Body: `searchkey={q}&v=v2.13&page={p}`, referer `/search` |
-| Manga Detail | GET | `/manga/{id}` | Returns HTML, parsed in `html/mod.rs` |
-| Chapter List | GET | `/v2.0/apis/manga/chapterByPage?code={id}&page={p}&lang=cn&order=asc` | Paginated, `isEnd` field signals end |
-| Page Images | GET | `/v2.0/apis/manga/reading?code={mid}&cid={chid}&v=v4.300101&_t={ts}` | Encrypted scans |
-| Rankings | GET | `/rank/{type}?page={p}` | Returns HTML, parsed in `html/mod.rs` |
+| Catalog listings | GET | `https://hipapi1.s3file.top/v1/mangas?sort={s}&page={p}&per_page=18` | Working. `sort` ∈ popular/weekly/latest, optional `status` ∈ completed/ongoing. Response `{code:200, data:{items, page, total_pages}}`; item `mid` is the `/works/` slug, cover fields need `https://cover.s3imgs.top` prefix |
+| ~~Search~~ | POST | `~~/v2.0/apis/manga/ssearch~~` | **Broken** (see redesign note below) |
+| ~~Manga Detail~~ | GET | `~~/manga/{id}~~` | **Broken** — new site uses `/works/{base64}--{slug}` |
+| ~~Chapter List~~ | GET | `~~/v2.0/apis/manga/chapterByPage?code={id}~~` | **Broken** — chapters are embedded in the `/works/` HTML |
+| ~~Page Images~~ | GET | `~~/v2.0/apis/manga/reading?...~~` | **Broken** — reader moved to `reader.hipmh.top` |
+| ~~Rankings~~ | GET | `~~/rank/{type}?page={p}~~` | **Broken** — old rank pages gone |
+
+**Site redesign note (2026-08):** m.hipmh.com was rebuilt (Astro, Traditional Chinese). The old `/v2.0/apis/*` endpoints, `/rank/*` pages, and `/manga/{id}` detail pages all return empty. **Only the catalog listings work** (via `/v1/mangas`). Search, manga detail, chapter list, and page list are still broken and need rework: detail = `/works/` HTML, chapters embedded in that page, reader on `reader.hipmh.top`.
 
 ## Key Logic (across files)
 
 ### Search response normalization (lib.rs `get_search_manga_list`)
-The search endpoint has returned several response shapes over time. The code defensively checks three locations — `data.items`, top-level `items`, `payload.items` — and each may be a real array **or a string containing JSON**. Don't "simplify" this into a single shape; the site varies.
+The search endpoint has returned several response shapes over time. The code defensively checks three locations — `data.items`, top-level `items`, `payload.items` — and each may be a real array **or a string containing JSON**. Don't "simplify" this into a single shape; the site varies. (The current search endpoint is dead — see the redesign note.)
+
+### Catalog listings (lib.rs `ListingProvider`)
+All five listings (人气榜/本周热门/最新上架/完结/连载) call `https://hipapi1.s3file.top/v1/mangas` with `sort`/`status` params and parse the JSON. Manga keys come from each item's `mid` (a `/works/` slug) via `works_slug_to_key`, which base64-decodes the leading segment (e.g. `bToyMzQ3NQ-...` → `m:23475`). Covers are relative and get prefixed with `https://cover.s3imgs.top`. `has_next_page = page < total_pages`.
 
 ### Filter → URL mapping (net/mod.rs)
 `res/filters.json` defines the select filters (`地区`, `受众`, `状态`, `类型`). `Url::from_query_or_filters` matches these by their Chinese `id`. The genre select has two id cases:
@@ -74,7 +79,7 @@ The reading request requires anti-bot/browser-like headers: an `X-Requested-Id` 
 If scan decoding breaks, check `SECRET` (currently a placeholder `DEV_SCAN_SECRET_2026_change_me`) and `DOMAIN` (`hipmh.com`) against the live site. When building `Page`s, entries with `n != 0` (images from the next chapter) are skipped and the `?q=` query param is stripped from image URLs.
 
 ### HTML parsing (html/mod.rs)
-Manga detail uses `.mg-cover>mip-img` (cover), `h2.mg-title` (title), `.mg-sub-title>a` (authors), `#showmore` (description), `.mg-cate>a` (tags). Ranking pages use `.manga-rank` items with `.manga-rank-cover>a` (href → id), `.manga-rank-cover>a>mip-img` (cover), `.manga-title`. `Viewer::Webtoon` is set for all manga.
+Manga detail (currently broken — hits the dead `/manga/{id}` page) parses `.mg-cover>mip-img` (cover), `h2.mg-title` (title), `.mg-sub-title>a` (authors), `#showmore` (description), `.mg-cate>a` (tags). `Viewer::Webtoon` is set for all manga.
 
 ### Deep Link Handling
 - `/works/{base64_id}--{slug}` — base64-decodes the ID (decodes to `m:{numeric_id}`), used as the manga key

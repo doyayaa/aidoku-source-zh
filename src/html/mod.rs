@@ -1,18 +1,13 @@
 use crate::BASE_URL;
 use aidoku::{
 	alloc::{string::ToString as _, vec, String, Vec},
-	error,
-	imports::{
-		html::{Document, ElementList},
-		net::Request,
-	},
+	imports::{html::Document, net::Request},
 	prelude::*,
-	Manga, MangaPageResult, Result, Viewer,
+	Manga, Result, Viewer,
 };
 
 pub trait MangaPage {
 	fn update_details(&self, manga: &mut Manga) -> Result<()>;
-	fn manga_page_result(&self) -> Result<MangaPageResult>;
 }
 
 impl MangaPage for Document {
@@ -55,52 +50,5 @@ impl MangaPage for Document {
 		manga.url = Some(url);
 
 		Ok(())
-	}
-
-	fn manga_page_result(&self) -> Result<MangaPageResult> {
-		let entries: Vec<Manga> = self
-			.try_select(".manga-rank")?
-			.filter_map(|item| {
-				let id = item
-					.select_first(".manga-rank-cover>a")
-					.and_then(|e| e.attr("href"))
-					.and_then(|href| {
-						href.split("/")
-							.filter(|a| !a.is_empty())
-							.last()
-							.map(|s| s.to_string())
-					})?;
-				let cover = item
-					.select_first(".manga-rank-cover>a>mip-img")
-					.and_then(|e| e.attr("src"))?;
-				let title = item
-					.select_first(".manga-title")
-					.and_then(|e| e.text())
-					.map(|t| t.trim().to_string())?;
-
-				Some(Manga {
-					key: id,
-					cover: Some(cover),
-					title,
-					..Default::default()
-				})
-			})
-			.collect();
-
-		Ok(MangaPageResult {
-			entries,
-			has_next_page: false,
-		})
-	}
-}
-
-trait TrySelect {
-	fn try_select<S: AsRef<str>>(&self, css_query: S) -> Result<ElementList>;
-}
-
-impl TrySelect for Document {
-	fn try_select<S: AsRef<str>>(&self, css_query: S) -> Result<ElementList> {
-		self.select(&css_query)
-			.ok_or_else(|| error!("No element found for selector: `{}`", css_query.as_ref()))
 	}
 }

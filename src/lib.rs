@@ -15,6 +15,7 @@ use html::MangaPage as _;
 use net::Url;
 
 pub const BASE_URL: &str = "https://m.hipmh.com";
+const API_URL: &str = "https://hipapi1.s3file.top/v1/mangas";
 
 struct Hipmh;
 
@@ -191,21 +192,74 @@ impl DeepLinkHandler for Hipmh {
 impl ListingProvider for Hipmh {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
 		let url = match listing.id.as_str() {
-			"day" => format!("{}/rank/day?page={}", BASE_URL, page),
-			"week" => format!("{}/rank/week?page={}", BASE_URL, page),
-			"month" => format!("{}/rank/month?page={}", BASE_URL, page),
-			"dayBookcasesOne" => format!("{}/rank/dayBookcasesOne?page={}", BASE_URL, page),
-			"weekBookcasesOne" => format!("{}/rank/weekBookcasesOne?page={}", BASE_URL, page),
-			"monthBookcasesOne" => format!("{}/rank/monthBookcasesOne?page={}", BASE_URL, page),
-			"voteNumMonthRank" => format!("{}/rank/voteNumMonthRank?page={}", BASE_URL, page),
-			"voteRank" => format!("{}/rank/voteRank?page={}", BASE_URL, page),
-			"latest" => return self.get_search_manga_list(None, page, Vec::new()),
+			"popularity" => format!("{}?sort=popular&page={}&per_page=18", API_URL, page),
+			"weekly" => format!("{}?sort=weekly&page={}&per_page=18", API_URL, page),
+			"newReleases" => format!("{}?sort=latest&page={}&per_page=18", API_URL, page),
+			"completed" => format!(
+				"{}?status=completed&sort=popular&page={}&per_page=18",
+				API_URL, page
+			),
+			"ongoing" => format!(
+				"{}?status=ongoing&sort=popular&page={}&per_page=18",
+				API_URL, page
+			),
 			_ => bail!("Invalid listing"),
 		};
 
-		let html = Request::get(url)?.header("Origin", BASE_URL).html()?;
+		let json: serde_json::Value = Request::get(url)?
+			.header("Origin", BASE_URL)
+			.header("Referer", BASE_URL)
+			.send()?
+			.get_json()?;
 
-		html.manga_page_result()
+		let data = json
+			.get("data")
+			.ok_or_else(|| error!("Expected data object"))?;
+		let items = data
+			.get("items")
+			.and_then(|v| v.as_array())
+			.ok_or_else(|| error!("Expected items array"))?;
+		let total_pages = data.get("total_pages").and_then(|v| v.as_i64()).unwrap_or(1);
+
+		let mut mangas: Vec<Manga> = Vec::new();
+		for item in items {
+			let item = match item.as_object() {
+				Some(item) => item,
+				None => continue,
+			};
+			let mid = item
+				.get("mid")
+				.and_then(|v| v.as_str())
+				.unwrap_or_default();
+			let title = item
+				.get("title")
+				.and_then(|v| v.as_str())
+				.unwrap_or_default()
+				.to_string();
+			let cover = item
+				.get("vertical_image_url")
+				.or_else(|| item.get("cover_image_url"))
+				.and_then(|v| v.as_str())
+				.map(|u| {
+					if u.starts_with("http") {
+						u.to_string()
+					} else {
+						format!("https://cover.s3imgs.top{}", u)
+					}
+				})
+				.unwrap_or_default();
+			mangas.push(Manga {
+				key: works_slug_to_key(mid),
+				cover: Some(cover),
+				title,
+				..Default::default()
+			});
+		}
+
+		Ok(MangaPageResult {
+			entries: mangas,
+			has_next_page: page < total_pages as i32,
+		})
 	}
 }
 
@@ -217,6 +271,14 @@ fn decode_work_id(encoded: &str) -> String {
 		Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|_| encoded.into()),
 		Err(_) => encoded.into(),
 	}
+}
+
+/// Convert a hipmh `/works/` slug (e.g. "bToyMzQ3NQ-yi-ren-zhi-xia-tencent-531490-17793")
+/// to a manga key by base64-decoding the leading ID segment (decodes to "m:{numeric_id}").
+/// Falls back to the raw first segment if decoding fails.
+fn works_slug_to_key(slug: &str) -> String {
+	let encoded = slug.split('-').next().unwrap_or(slug);
+	decode_work_id(encoded)
 }
 
 register_source!(
