@@ -4,6 +4,7 @@
 		"name": "嬉皮漫画",
 		"version": 1,
 		"url": "https://m.hipmh.com",
+		"minAppVersion": "0.7.1",
 		"contentRating": 1,
 		"languages": ["zh"]
 	},
