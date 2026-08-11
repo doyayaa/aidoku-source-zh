@@ -2,17 +2,16 @@
 
 mod html;
 mod json;
-mod net;
 
 use aidoku::{
 	Chapter, DeepLinkHandler, DeepLinkResult, ImageRequestProvider, Listing, ListingProvider,
 	Manga, MangaPageResult, Page, Result, Source,
 	alloc::{String, Vec, string::ToString as _},
+	helpers::uri::encode_uri,
 	imports::net::Request,
 	prelude::*,
 };
 use html::MangaPage as _;
-use net::Url;
 
 pub const BASE_URL: &str = "https://m.hipmh.com";
 const API_URL: &str = "https://hipapi1.s3file.top/v1/mangas";
@@ -30,93 +29,29 @@ impl Source for Hipmh {
 		page: i32,
 		filters: Vec<aidoku::FilterValue>,
 	) -> Result<MangaPageResult> {
-		let url = Url::from_query_or_filters(query.as_deref(), page, &filters)?;
-		let json: serde_json::Value = url.request()?.send()?.get_json()?;
+		// A text filter is treated as a search query.
+		let text = filters.iter().find_map(|f| match f {
+			aidoku::FilterValue::Text { value, .. } if !value.is_empty() => Some(value.clone()),
+			_ => None,
+		});
+		let query = text.or(query).filter(|q| !q.trim().is_empty());
 
-		enum ArraySource<'a> {
-			Borrowed(&'a [serde_json::Value]),
-			Owned(Vec<serde_json::Value>),
-		}
-
-		let mut list_vec: Option<ArraySource> = None;
-
-		fn try_extract<'a>(v: &'a serde_json::Value) -> Option<ArraySource<'a>> {
-			if let Some(arr) = v.as_array() {
-				return Some(ArraySource::Borrowed(arr));
-			}
-			if let Some(s) = v.as_str()
-				&& let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s)
-				&& let Some(arr) = parsed.as_array()
-			{
-				return Some(ArraySource::Owned(arr.clone()));
-			}
-			None
-		}
-
-		// 1) data.items
-		if let Some(data_obj) = json.get("data") {
-			if let Some(items) = data_obj.get("items") {
-				list_vec = try_extract(items);
-			} else if let Some(arr) = data_obj.as_array() {
-				list_vec = Some(ArraySource::Borrowed(arr));
-			}
-		}
-
-		// 2) top-level items
-		if list_vec.is_none()
-			&& let Some(items) = json.get("items")
-		{
-			list_vec = try_extract(items);
-		}
-
-		// 3) payload.items
-		if list_vec.is_none()
-			&& let Some(payload) = json.get("payload")
-			&& let Some(items) = payload.get("items")
-		{
-			list_vec = try_extract(items);
-		}
-
-		let list = match list_vec {
-			Some(ArraySource::Borrowed(v)) => v,
-			Some(ArraySource::Owned(ref v)) => v,
-			None => bail!("Expected items array in search response"),
+		let url = match query {
+			Some(q) => format!(
+				"https://hipapi1.s3file.top/v1/search?q={}&page={}&page_size=20",
+				encode_uri(&q),
+				page
+			),
+			None => build_mangas_filter_url(page, &filters),
 		};
 
-		let mut mangas: Vec<Manga> = Vec::new();
+		let json: serde_json::Value = Request::get(url)?
+			.header("Origin", BASE_URL)
+			.header("Referer", BASE_URL)
+			.send()?
+			.get_json()?;
 
-		for item in list {
-			let item = match item.as_object() {
-				Some(item) => item,
-				None => continue,
-			};
-			let id = item
-				.get("manga_code")
-				.and_then(|v| v.as_str())
-				.unwrap_or_default()
-				.to_string();
-			let cover = item
-				.get("cover")
-				.and_then(|v| v.as_str())
-				.unwrap_or_default()
-				.to_string();
-			let title = item
-				.get("name")
-				.and_then(|v| v.as_str())
-				.unwrap_or_default()
-				.to_string();
-			mangas.push(Manga {
-				key: id,
-				cover: Some(cover),
-				title,
-				..Default::default()
-			});
-		}
-
-		Ok(MangaPageResult {
-			entries: mangas.clone(),
-			has_next_page: !mangas.is_empty(),
-		})
+		parse_manga_list(json, page)
 	}
 
 	fn get_manga_update(
@@ -216,54 +151,7 @@ impl ListingProvider for Hipmh {
 			.send()?
 			.get_json()?;
 
-		let data = json
-			.get("data")
-			.ok_or_else(|| error!("Expected data object"))?;
-		let items = data
-			.get("items")
-			.and_then(|v| v.as_array())
-			.ok_or_else(|| error!("Expected items array"))?;
-		let total_pages = data.get("total_pages").and_then(|v| v.as_i64()).unwrap_or(1);
-
-		let mut mangas: Vec<Manga> = Vec::new();
-		for item in items {
-			let item = match item.as_object() {
-				Some(item) => item,
-				None => continue,
-			};
-			let mid = item
-				.get("mid")
-				.and_then(|v| v.as_str())
-				.unwrap_or_default();
-			let title = item
-				.get("title")
-				.and_then(|v| v.as_str())
-				.unwrap_or_default()
-				.to_string();
-			let cover = item
-				.get("vertical_image_url")
-				.or_else(|| item.get("cover_image_url"))
-				.and_then(|v| v.as_str())
-				.map(|u| {
-					if u.starts_with("http") {
-						u.to_string()
-					} else {
-						format!("https://cover.s3imgs.top{}", u)
-					}
-				})
-				.unwrap_or_default();
-			mangas.push(Manga {
-				key: works_slug_to_key(mid),
-				cover: Some(cover),
-				title,
-				..Default::default()
-			});
-		}
-
-		Ok(MangaPageResult {
-			entries: mangas,
-			has_next_page: page < total_pages as i32,
-		})
+		parse_manga_list(json, page)
 	}
 }
 
@@ -290,6 +178,84 @@ fn works_slug_to_key(slug: &str) -> String {
 fn key_to_works_id(key: &str) -> String {
 	use base64::{Engine as _, engine::general_purpose::STANDARD};
 	STANDARD.encode(key)
+}
+
+/// Parse a `/v1/mangas` or `/v1/search` response into a `MangaPageResult`.
+/// Handles both `data.items` (listings) and `data.data` (search) item arrays,
+/// and both `mid` (listings) and `id` (search) item key fields.
+fn parse_manga_list(json: serde_json::Value, page: i32) -> Result<MangaPageResult> {
+	let data = json
+		.get("data")
+		.ok_or_else(|| error!("Expected data object"))?;
+	let items = data
+		.get("items")
+		.or_else(|| data.get("data"))
+		.and_then(|v| v.as_array())
+		.ok_or_else(|| error!("Expected items array"))?;
+	let total_pages = data.get("total_pages").and_then(|v| v.as_i64()).unwrap_or(1);
+
+	let mut mangas: Vec<Manga> = Vec::new();
+	for item in items {
+		let item = match item.as_object() {
+			Some(item) => item,
+			None => continue,
+		};
+		let mid = item
+			.get("mid")
+			.or_else(|| item.get("id"))
+			.and_then(|v| v.as_str())
+			.unwrap_or_default();
+		let title = item
+			.get("title")
+			.and_then(|v| v.as_str())
+			.unwrap_or_default()
+			.to_string();
+		let cover = item
+			.get("vertical_image_url")
+			.or_else(|| item.get("cover_image_url"))
+			.and_then(|v| v.as_str())
+			.map(|u| {
+				if u.starts_with("http") {
+					u.to_string()
+				} else {
+					format!("https://cover.s3imgs.top{}", u)
+				}
+			})
+			.unwrap_or_default();
+		mangas.push(Manga {
+			key: works_slug_to_key(mid),
+			cover: Some(cover),
+			title,
+			..Default::default()
+		});
+	}
+
+	Ok(MangaPageResult {
+		entries: mangas,
+		has_next_page: page < total_pages as i32,
+	})
+}
+
+/// Build a `/v1/mangas` browse URL from the Chinese filter selects.
+/// Only the 状态 (status) filter maps directly (`status=ongoing|completed`);
+/// the 类型/地区/genre filters need numeric IDs that aren't exposed by the API,
+/// so they're skipped to avoid 400 errors.
+fn build_mangas_filter_url(page: i32, filters: &[aidoku::FilterValue]) -> String {
+	let mut url = format!("{}?page={}&per_page=18", API_URL, page);
+	for filter in filters {
+		let aidoku::FilterValue::Select { id, value } = filter else {
+			continue;
+		};
+		if id.as_str() == "状态" {
+			let status = match value.as_str() {
+				"0" => "ongoing",
+				"1" => "completed",
+				_ => continue,
+			};
+			url.push_str(&format!("&status={}", status));
+		}
+	}
+	url
 }
 
 register_source!(

@@ -31,8 +31,7 @@ Implements the Aidoku trait-based API (Aidoku 0.7+), registered via `register_so
 
 ```
 src/
-├── lib.rs                    # Source traits, URL dispatch, deep links, BASE_URL, /v1/mangas listing
-├── net/mod.rs                # URL construction, filter parsing, GENRE_OPTIONS/GENRE_IDS arrays
+├── lib.rs                    # Source traits, search/browse/listing via /v1 APIs, deep links, BASE_URL
 ├── html/mod.rs               # HTML scraper: /works/ detail parsing
 └── json/
     ├── chapter_list/mod.rs   # Chapter list via /v1/manga/chapters API
@@ -46,7 +45,8 @@ src/
 | Catalog listings | GET | `https://hipapi1.s3file.top/v1/mangas?sort={s}&page={p}&per_page=18` | Working. `sort` ∈ popular/weekly/latest, optional `status` ∈ completed/ongoing. Response `{code:200, data:{items, page, total_pages}}`; item `mid` is the `/works/` slug, cover fields need `https://cover.s3imgs.top` prefix |
 | Manga Detail | GET | `https://m.hipmh.com/works/{base64}` | Working (id-only base64, no slug needed). Parsed in `html/mod.rs` via `[data-manga-title]`/`[data-cover-url]`, `#d-info-content p`, `a[href^="/author/"]`, `a[href^="/genre/"]`, status via `/ongoing`/`/completed` link |
 | Chapter List | GET | `https://hipapi1.s3file.top/v1/manga/chapters?mid={numeric_id}&page={p}&per_page=50&order=desc` | Working. Item `hid` is the chapter key, `title`, `chapter_number`. API caps `per_page` at 50 |
-| ~~Search~~ | POST | `~~/v2.0/apis/manga/ssearch~~` | **Broken** — new site uses `/search` HTML, not implemented yet |
+| Search | GET | `https://hipapi1.s3file.top/v1/search?q={query}&page={p}&page_size=20` | Working. Response `{code:200, data:{data:[items], total, page, total_pages}}`; item `id` is the full `/works/` slug |
+| Browse (filters) | GET | `/v1/mangas?...` | Only the 状态 filter maps (`status=ongoing\|completed`); 类型/地区 need numeric IDs not exposed by the API, so they're skipped |
 | ~~Page Images~~ | GET | `~~/v2.0/apis/manga/reading?...~~` | **Broken** — reader moved to `reader.hipmh.top`; new `/v2/chapter` images need decoder (see below) |
 | ~~Rankings~~ | GET | `~~/rank/{type}?page={p}~~` | **Broken** — old rank pages gone |
 
@@ -60,22 +60,15 @@ src/
 | Reading | `GET /v2/chapter?hid={api_hid}` on hipapi1 | `api_hid` derives from frontend `hid`: first segment `bToyMzQ3NS1jOjc4MzI5` decodes to `m:23475-c:78329`, api_hid = base64(`c:78329`) + `-` + second segment. Response `data.images` is an **encrypted string** |
 | Image decode | N/A | **BLOCKED** — `data.images` is decrypted by an obfuscated stream cipher in `reader.hipmh.top/assets/runtime/chapter-decoder.js` (obfuscator.io). Layout: strip prefix `qM9` + suffix `Z7`, then `A[0:1488] + "Vx" + B[1490:2978] + "pL0" + K[2981:end]`, combined (`_0x5634c6['j']`) + odd-7-char-chunk reversal (`_0x2b5337`) + transform (`_0x42927d`) → url-safe base64 JSON. Reimplementing in Rust is not yet done. Image base: `https://hip-tx-1.s3imgs.top` (line1), prefix on relative `/i/...` paths |
 
-**Current status:** catalog, manga detail, and chapter list all work. **Search is not implemented** (new site uses `/search` HTML; old ssearch API dead). **Page images are blocked on the image decoder** (below).
+**Current status:** catalog, manga detail, chapter list, and search all work. **Page images are blocked on the image decoder** (below).
 
 ## Key Logic (across files)
 
-### Search response normalization (lib.rs `get_search_manga_list`)
-The search endpoint has returned several response shapes over time. The code defensively checks three locations — `data.items`, top-level `items`, `payload.items` — and each may be a real array **or a string containing JSON**. Don't "simplify" this into a single shape; the site varies. (The current search endpoint is dead — see the redesign note.)
+### Search + browse (lib.rs `get_search_manga_list`)
+A text filter is treated as a search query (via `/v1/search?q=...&page=&page_size=20`). With no query, browse filters map to `/v1/mangas` — only the 状态 filter works (`status=ongoing|completed`); 类型/地区 need numeric IDs the API doesn't expose, so they're skipped.
 
 ### Catalog listings (lib.rs `ListingProvider`)
-All five listings (人气榜/本周热门/最新上架/完结/连载) call `https://hipapi1.s3file.top/v1/mangas` with `sort`/`status` params and parse the JSON. Manga keys come from each item's `mid` (a `/works/` slug) via `works_slug_to_key`, which base64-decodes the leading segment (e.g. `bToyMzQ3NQ-...` → `m:23475`). Covers are relative and get prefixed with `https://cover.s3imgs.top`. `has_next_page = page < total_pages`.
-
-### Filter → URL mapping (net/mod.rs)
-`res/filters.json` defines the select filters (`地区`, `受众`, `状态`, `类型`). `Url::from_query_or_filters` matches these by their Chinese `id`. The genre select has two id cases:
-- `"类型"` (uppercase, from filters.json) → value is used as the raw pinyin slug.
-- `"genre"` (lowercase) → the Chinese option name is mapped to its pinyin slug via the parallel `GENRE_OPTIONS`/`GENRE_IDS` arrays.
-
-**Keep `GENRE_OPTIONS`/`GENRE_IDS` in sync with the `"类型"` filter in `res/filters.json`** — they duplicate the same data and are indexed positionally.
+All five listings (人气榜/本周热门/最新上架/完结/连载) call `https://hipapi1.s3file.top/v1/mangas` with `sort`/`status` params. `parse_manga_list` (shared with search) handles both `data.items` (listings, item `mid`) and `data.data` (search, item `id`) shapes. Manga keys come from the `/works/` slug via `works_slug_to_key` (base64-decode the leading segment → `m:23475`). Covers are relative and get prefixed with `https://cover.s3imgs.top`. `has_next_page = page < total_pages`.
 
 ### Chapter list (json/chapter_list/mod.rs)
 Calls `https://hipapi1.s3file.top/v1/manga/chapters` with `mid` (numeric id, `m:` prefix stripped from the key), `order=desc` (newest first), paginating until `page >= total_pages`. The API caps `per_page` at 50. Chapter `key` is the item's `hid`; `url` is `/chapter/go?hid={hid}&m={mid}`.
@@ -105,15 +98,13 @@ Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `pub
 
 - `aidoku` (git: Aidoku/aidoku-rs) — core framework with `helpers` + `json` features
 - `serde`/`serde_json` — JSON parsing
-- `base64` — scan and ID encoding
-- `sha2` — scan decryption
-- `miniz_oxide` — decompress encrypted scans
-- `regex` — chapter number extraction from titles
+- `base64` — work-ID encoding/decoding
+- `sha2` — old page-list scan decryption (dead endpoint)
+- `miniz_oxide` — old page-list decompression (dead endpoint)
 - `chrono` — date handling (if needed)
 
 ## Differences from zh.happymh
 
 - `BASE_URL` changed to hipmh.com
-- `DOMAIN` in scan decryption changed to `"hipmh.com"`
 - Deep link handler added support for `/works/` URL pattern (hipmh's Nuxt frontend format)
-- Search referer uses `/search` instead of `/sssearch`
+- Catalog/detail/chapters/search all use the redesigned site's `/v1/*` APIs instead of the old `/v2.0/apis/*` + `/rank/*` HTML
