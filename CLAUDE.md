@@ -35,7 +35,7 @@ src/
 ├── html/mod.rs               # HTML scraper: /works/ detail parsing
 └── json/
     ├── chapter_list/mod.rs   # Chapter list via /v1/manga/chapters API
-    └── page_list.rs          # Page images (OLD scan decryption, dead endpoint — rework pending)
+    └── page_list.rs          # Page images via /v2/chapter API + char-transform decoder
 ```
 
 ## API Endpoints
@@ -47,7 +47,7 @@ src/
 | Chapter List | GET | `https://hipapi1.s3file.top/v1/manga/chapters?mid={numeric_id}&page={p}&per_page=50&order=desc` | Working. Item `hid` is the chapter key, `title`, `chapter_number`. API caps `per_page` at 50 |
 | Search | GET | `https://hipapi1.s3file.top/v1/search?q={query}&page={p}&page_size=20` | Working. Response `{code:200, data:{data:[items], total, page, total_pages}}`; item `id` is the full `/works/` slug |
 | Browse (filters) | GET | `/v1/mangas?...` | Only the 状态 filter maps (`status=ongoing\|completed`); 类型/地区 need numeric IDs not exposed by the API, so they're skipped |
-| ~~Page Images~~ | GET | `~~/v2.0/apis/manga/reading?...~~` | **Broken** — reader moved to `reader.hipmh.top`; new `/v2/chapter` images need decoder (see below) |
+| Page Images | GET | `https://hipapi1.s3file.top/v2/chapter?hid={api_hid}` | Working. Needs `Origin`/`Referer: https://reader.hipmh.top`. Response `data.images` is an encrypted string, `data.line` selects the image CDN. `api_hid` derived from the chapter `hid` (see below) |
 | ~~Rankings~~ | GET | `~~/rank/{type}?page={p}~~` | **Broken** — old rank pages gone |
 
 **Site redesign note (2026-08):** m.hipmh.com was rebuilt (Astro, Traditional Chinese). The old `/v2.0/apis/*` endpoints, `/rank/*` pages, and `/manga/{id}` detail pages all return empty. The current working endpoints:
@@ -57,10 +57,10 @@ src/
 | Catalog listings | `https://hipapi1.s3file.top/v1/mangas?sort={s}&status={st}&page={p}&per_page={n}` | `sort` ∈ popular/weekly/latest, `status` ∈ completed/ongoing. Item `mid` = `/works/` slug |
 | Manga detail | `GET /works/{base64_id}` (id-only works) | Parse JSON-LD (`<script type="application/ld+json">`): `name` (title), `description`, `image`, `author.name` (comma-sep). Authors also `a[href^="/author/"]`, tags `a[href^="/genre/"]`, status via `/ongoing`(連載中) or `/completed`(完結) link |
 | Chapter list | `https://hipapi1.s3file.top/v1/manga/chapters?mid={numeric_id}&page={p}&per_page={n}&order={desc\|asc}` | Item `hid` = chapter key (base64 "m:{mid}-c:{cid}--{mid}:{num}.00"), `title`, `chapter_number` |
-| Reading | `GET /v2/chapter?hid={api_hid}` on hipapi1 | `api_hid` derives from frontend `hid`: first segment `bToyMzQ3NS1jOjc4MzI5` decodes to `m:23475-c:78329`, api_hid = base64(`c:78329`) + `-` + second segment. Response `data.images` is an **encrypted string** |
-| Image decode | N/A | **BLOCKED** — `data.images` is decrypted by an obfuscated stream cipher in `reader.hipmh.top/assets/runtime/chapter-decoder.js` (obfuscator.io). Layout: strip prefix `qM9` + suffix `Z7`, then `A[0:1488] + "Vx" + B[1490:2978] + "pL0" + K[2981:end]`, combined (`_0x5634c6['j']`) + odd-7-char-chunk reversal (`_0x2b5337`) + transform (`_0x42927d`) → url-safe base64 JSON. Reimplementing in Rust is not yet done. Image base: `https://hip-tx-1.s3imgs.top` (line1), prefix on relative `/i/...` paths |
+| Reading | `GET /v2/chapter?hid={api_hid}` on hipapi1 | `api_hid` derives from frontend `hid`: first segment `bToyMzQ3NS1jOjc4MzI5` decodes to `m:23475-c:78329`, api_hid = base64(`c:78329`, padding stripped) + `-` + second segment → `Yzo3ODMyOQ-MjM0NzU6ODI1LjAw`. Response `data.images` is an encrypted string, `data.line` = image CDN line number |
+| Image decode | Pure char transform (no crypto) | **Working** (`decode_images` in `src/json/page_list.rs`, verified byte-for-byte against `reader.hipmh.top/assets/runtime/chapter-decoder.js`). Strip prefix `qM9` + suffix `Z7` → inner. `total = len(inner)-5`; `k_len = total/3`, `a_len = (total-k_len)/2`, `b_len = total-k_len-a_len`. Layout `A + "Vx" + B + "pL0" + K`; recombine as `K + A + B`. Split into 7-char chunks, reverse every odd chunk (idx%2). Substitute chars FROM = `_-9876543210...Z` → TO = `ABC...-_` (scrambled→standard url-safe base64 alphabet). Url-safe base64 (no padding) → UTF-8 JSON array of relative `/i/...` paths. Image URL = `https://hip-tx-{line}.s3imgs.top{path}`, `Referer: https://m.hipmh.com/` |
 
-**Current status:** catalog, manga detail, chapter list, and search all work. **Page images are blocked on the image decoder** (below).
+**Current status:** catalog, manga detail, chapter list, search, and **page images** all work. The image decoder is fully reverse-engineered and implemented in Rust (`src/json/page_list.rs`).
 
 ## Key Logic (across files)
 
@@ -73,13 +73,10 @@ All five listings (人气榜/本周热门/最新上架/完结/连载) call `http
 ### Chapter list (json/chapter_list/mod.rs)
 Calls `https://hipapi1.s3file.top/v1/manga/chapters` with `mid` (numeric id, `m:` prefix stripped from the key), `order=desc` (newest first), paginating until `page >= total_pages`. The API caps `per_page` at 50. Chapter `key` is the item's `hid`; `url` is `/chapter/go?hid={hid}&m={mid}`.
 
-### Page images + scan decryption (json/page_list.rs)
-The reading request requires anti-bot/browser-like headers: an `X-Requested-Id` timestamp, `Accept: application/json`, and a crafted `_ga_HVJMXGJXFJ` cookie whose value embeds `generate_ga_timestamp()` (a timestamp with a checksum suffix derived from a lookup `TABLE` keyed on the last 3 digits). The response's `scans` field is either a JSON array or an encrypted string; when `isEncode` is true it's decrypted via:
-1. SHA-256 key derivation (inputs: `SECRET` + first 8 bytes + `DOMAIN`) to compute offsets that locate hex-encoded key, nonce, and base64 ciphertext within the blob
-2. Custom SHA-256-based keystream XORed in 32-byte blocks (`key‖nonce‖block_idx` hashed per block)
-3. `miniz_oxide` zlib decompression; plaintext must start with `SC01`
+### Page images (json/page_list.rs)
+`get_pages` derives `api_hid` from the chapter `key` (the `/v1/manga/chapters` `hid`): `rsplit_once('-')` → seg1 (base64 of `m:{mid}-c:{cid}`, padding may be stripped) and seg2; `api_hid = base64("c:{cid}")` with `=` trimmed + `-` + seg2. Then `GET https://hipapi1.s3file.top/v2/chapter?hid={api_hid}` with `Origin`/`Referer: https://reader.hipmh.top` (no auth needed). The response `data.images` is decoded by `decode_images` — a pure character transform (no crypto, see the table above) producing a JSON array of relative `/i/...` paths. Page URLs are built as `https://hip-tx-{data.line}.s3imgs.top{path}`; image requests use `Referer: https://m.hipmh.com/` via `ImageRequestProvider`.
 
-If scan decoding breaks, check `SECRET` (currently a placeholder `DEV_SCAN_SECRET_2026_change_me`) and `DOMAIN` (`hipmh.com`) against the live site. When building `Page`s, entries with `n != 0` (images from the next chapter) are skipped and the `?q=` query param is stripped from image URLs.
+If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/runtime/chapter-decoder.js` (the probe files `.probe-*.js`/`.probe-*.txt` in the repo root, git-ignored, reproduce the transform). The `TRANSLATE` substitution table and the `qM9`/`Vx`/`pL0`/`Z7` markers are the invariants to check.
 
 ### HTML parsing (html/mod.rs)
 `update_details` parses the `/works/{base64_id}` page (id-only URL works, no slug needed). Uses attribute selectors (SwiftSoup, full CSS): `[data-manga-title]` and `[data-cover-url]` on the app container, `#d-info-content p` (description), `a[href^="/author/"]` (authors), `a[href^="/genre/"]` (tags). Status: presence of `a[href='/completed']`/`a[href='/ongoing']` → `MangaStatus`. `Viewer::Webtoon` is set for all manga.
@@ -98,10 +95,7 @@ Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `pub
 
 - `aidoku` (git: Aidoku/aidoku-rs) — core framework with `helpers` + `json` features
 - `serde`/`serde_json` — JSON parsing
-- `base64` — work-ID encoding/decoding
-- `sha2` — old page-list scan decryption (dead endpoint)
-- `miniz_oxide` — old page-list decompression (dead endpoint)
-- `chrono` — date handling (if needed)
+- `base64` — work-ID encoding/decoding + url-safe decode of image payloads
 
 ## Differences from zh.happymh
 

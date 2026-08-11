@@ -1,201 +1,170 @@
-use crate::BASE_URL;
 use aidoku::{
 	Page, Result,
-	alloc::{String, Vec, string::ToString as _, vec},
+	alloc::{String, Vec, string::ToString as _},
 	error,
-	imports::{net::Request, std::current_date},
+	imports::net::Request,
 	prelude::*,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use sha2::{Digest as _, Sha256};
+use base64::{Engine as _, engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}};
+
+const CHAPTER_API: &str = "https://hipapi1.s3file.top/v2/chapter";
+const READER_ORIGIN: &str = "https://reader.hipmh.top";
+const IMAGE_BASE: &str = "https://hip-tx-";
+
+// Scrambled url-safe base64 alphabet used by the reader (FROM -> TO substitution).
+const FROM: &[u8] = b"_-9876543210abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const TO: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+const TRANSLATE: [u8; 256] = {
+	let mut t = [0u8; 256];
+	let mut i = 0usize;
+	while i < 256 {
+		t[i] = i as u8;
+		i += 1;
+	}
+	let mut j = 0usize;
+	while j < FROM.len() {
+		t[FROM[j] as usize] = TO[j];
+		j += 1;
+	}
+	t
+};
 
 pub struct PageList;
 
 impl PageList {
-	pub fn get_pages(manga_id: String, chapter_id: String) -> Result<Vec<Page>> {
-		let request_id = (current_date() * 1000).to_string();
-		let ga_timestamp = generate_ga_timestamp();
-		let url = format!(
-			"{}/v2.0/apis/manga/reading?code={}&cid={}&v=v4.300101&_t={}",
-			BASE_URL, manga_id, chapter_id, request_id
-		);
-		let json: serde_json::Value = Request::get(url.clone())?
-			.header(
-				"Referer",
-				&format!("{}/mangaread/{}/{}", BASE_URL, manga_id, chapter_id),
-			)
-			.header("Origin", BASE_URL)
-			.header("X-Requested-With", "XMLHttpRequest")
-			.header("X-Requested-Id", &request_id)
-			.header("Accept", "application/json")
-			.header(
-				"Cookie",
-				&format!(
-					"_ga_HVJMXGJXFJ=GS2.1.s{}$o9$g1$t{}$j43$l0$h0",
-					ga_timestamp,
-					ga_timestamp + 99999
-				),
-			)
+	/// Fetch a chapter's page images from `https://hipapi1.s3file.top/v2/chapter`.
+	///
+	/// `chapter_key` is the chapter `hid` from `/v1/manga/chapters`, e.g.
+	/// `bToyMzQ3NS1jOjc4MzI5-MjM0NzU6ODI1LjAw` (base64 of `m:{mid}-c:{cid}` `-`
+	/// base64 of `{mid}:{num}.00`). The API wants an `api_hid` built from the
+	/// chapter id alone: base64(`c:{cid}`) padding-stripped `-` seg2.
+	pub fn get_pages(_manga_key: String, chapter_key: String) -> Result<Vec<Page>> {
+		let api_hid = derive_api_hid(&chapter_key)?;
+		let json: serde_json::Value = Request::get(format!("{}?hid={}", CHAPTER_API, api_hid))?
+			.header("Origin", READER_ORIGIN)
+			.header("Referer", READER_ORIGIN)
 			.send()?
 			.get_json()?;
 		let data = json
-			.as_object()
-			.ok_or_else(|| error!("Expected JSON object"))?;
-		let data = data
 			.get("data")
-			.and_then(|v| v.as_object())
 			.ok_or_else(|| error!("Expected data object"))?;
-		let is_encode = data
-			.get("isEncode")
-			.and_then(|v| v.as_bool())
-			.unwrap_or(false);
-		let scans = data
-			.get("scans")
-			.ok_or_else(|| error!("Expected scans field"))?;
-		let list: Vec<serde_json::Value> = if let Some(arr) = scans.as_array() {
-			arr.clone()
-		} else if let Some(s) = scans.as_str() {
-			let scans = if is_encode {
-				decode_scans(s)?
-			} else {
-				s.to_string()
-			};
-			let parsed: serde_json::Value = serde_json::from_str(&scans)
-				.map_err(|_| error!("Failed to parse scans JSON string"))?;
-			parsed
-				.as_array()
-				.ok_or_else(|| error!("Expected scans array after parsing"))?
-				.clone()
-		} else {
-			bail!("Expected scans array or JSON string");
-		};
-		let mut pages: Vec<Page> = Vec::new();
+		let images = data
+			.get("images")
+			.and_then(|v| v.as_str())
+			.ok_or_else(|| error!("Expected images string"))?;
+		let line = data.get("line").and_then(|v| v.as_i64()).unwrap_or(1);
 
-		for item in list.iter() {
-			let item = match item.as_object() {
-				Some(item) => item,
-				None => continue,
-			};
-
-			// Skip images from next chapter (n == 1)
-			let n = item.get("n").and_then(|v| v.as_i64()).unwrap_or(0);
-			if n != 0 {
-				continue;
-			}
-
-			let mut url = item
-				.get("url")
-				.and_then(|v| v.as_str())
-				.unwrap_or_default()
-				.to_string();
-
-			if let Some(stripped) = url.split("?q=").next() {
-				url = stripped.to_string();
-			}
-
+		let paths = decode_images(images)?;
+		let base = format!("{}{}.s3imgs.top", IMAGE_BASE, line);
+		let mut pages = Vec::with_capacity(paths.len());
+		for path in paths {
 			pages.push(Page {
-				content: aidoku::PageContent::url(url),
+				content: aidoku::PageContent::url(format!("{}{}", base, path)),
 				..Default::default()
 			});
 		}
-
 		Ok(pages)
 	}
 }
 
-fn generate_ga_timestamp() -> i64 {
-	const TABLE: [i64; 10] = [335, 984, 248, 485, 524, 559, 486, 165, 114, 103];
-	let seconds = current_date();
-	let digits = seconds.to_string();
-	let bytes = digits.as_bytes();
-	let len = bytes.len();
-	let sum = TABLE[(bytes[len - 3] - b'0') as usize]
-		+ TABLE[(bytes[len - 2] - b'0') as usize]
-		+ TABLE[(bytes[len - 1] - b'0') as usize];
-	let checksum = sum.to_string();
-	let checksum = &checksum[..3];
-	format!("{}{}", digits, checksum)
-		.parse()
-		.unwrap_or(seconds * 1000)
+/// Derive the `api_hid` the reading API expects from a chapter `hid`:
+/// `base64("c:{cid}")` (padding stripped) + `-` + the second segment.
+fn derive_api_hid(chapter_key: &str) -> Result<String> {
+	let (seg1, seg2) = chapter_key
+		.rsplit_once('-')
+		.ok_or_else(|| error!("Invalid chapter key"))?;
+	let decoded = decode_b64(seg1)?;
+	let decoded = String::from_utf8(decoded).map_err(|_| error!("Invalid hid segment"))?;
+	// decoded looks like "m:{mid}-c:{cid}"; we only need the chapter id.
+	let cid = decoded
+		.rsplit_once("-c:")
+		.map(|(_, cid)| cid)
+		.ok_or_else(|| error!("Unexpected hid segment format"))?;
+	let cid_enc = STANDARD.encode(format!("c:{}", cid));
+	Ok(format!("{}-{}", cid_enc.trim_end_matches('='), seg2))
 }
 
-fn decode_scans(encrypted_scans: &str) -> Result<String> {
-	const SECRET: &[u8] = b"DEV_SCAN_SECRET_2026_change_me";
-	const DOMAIN: &[u8] = b"hipmh.com";
-
-	let buf = encrypted_scans.as_bytes();
-	if buf.len() < 8 {
-		bail!("Invalid encoded scans");
+/// Decode the encrypted `data.images` payload into the list of relative image paths.
+///
+/// Pure character transform (no crypto), verified byte-for-byte against the
+/// site's obfuscated `chapter-decoder.js`:
+/// 1. Strip `qM9` prefix / `Z7` suffix
+/// 2. Layout `A + "Vx" + B + "pL0" + K`, recombine as `K + A + B`
+/// 3. Split into 7-char chunks, reverse every odd chunk
+/// 4. Substitute chars FROM -> TO (scrambled to standard url-safe base64 alphabet)
+/// 5. Url-safe base64 (no padding) -> UTF-8 JSON array of relative paths
+fn decode_images(encrypted: &str) -> Result<Vec<String>> {
+	let input = encrypted.as_bytes();
+	if input.len() < 8 || !input.starts_with(b"qM9") || !input.ends_with(b"Z7") {
+		bail!("Invalid images payload");
 	}
+	let inner = &input[3..input.len() - 2];
+	let total = inner.len() - 5;
+	let k_len = total / 3;
+	let a_len = (total - k_len) / 2;
+	let b_len = total - k_len - a_len;
 
-	let digest = sha256(&[SECRET, &buf[..8], DOMAIN].concat());
-	let off1 = (digest[0] as usize) % 24 + 8;
-	let off2 = (digest[1] as usize) % 24 + 8;
-	let off3 = (digest[2] as usize) % 24 + 8;
-
-	let key_start = off1 + 8;
-	let key_end = key_start + 64;
-	let nonce_start = key_end + off2;
-	let nonce_end = nonce_start + 32;
-	let cipher_start = nonce_end + off3;
-	if encrypted_scans.len() < cipher_start {
-		bail!("Encoded scans too short for computed offsets");
+	// Sanity-check the "Vx" / "pL0" separators before slicing.
+	if inner[a_len] != b'V'
+		|| inner[a_len + 1] != b'x'
+		|| inner[a_len + 2 + b_len] != b'p'
+		|| inner[a_len + 2 + b_len + 1] != b'L'
+		|| inner[a_len + 2 + b_len + 2] != b'0'
+	{
+		bail!("Unexpected images layout");
 	}
+	let seg_a = &inner[..a_len];
+	let seg_b = &inner[a_len + 2..a_len + 2 + b_len];
+	let seg_k = &inner[a_len + 2 + b_len + 3..];
 
-	let key = decode_hex(&encrypted_scans[key_start..key_end])?;
-	let nonce = decode_hex(&encrypted_scans[nonce_start..nonce_end])?;
-	let ciphertext = STANDARD
-		.decode(&encrypted_scans[cipher_start..])
-		.map_err(|_| error!("Failed to decode scans base64"))?;
+	let mut combined = Vec::with_capacity(inner.len());
+	combined.extend_from_slice(seg_k);
+	combined.extend_from_slice(seg_a);
+	combined.extend_from_slice(seg_b);
 
-	let mut state = [0_u8; 52];
-	state[..32].copy_from_slice(&key);
-	state[32..48].copy_from_slice(&nonce);
-
-	let mut plain = vec![0_u8; ciphertext.len()];
-	for i in (0..ciphertext.len()).step_by(32) {
-		let block_idx = (i / 32) as u32;
-		state[48..52].copy_from_slice(&block_idx.to_be_bytes());
-		let keystream = sha256(&state);
-		let block_size = core::cmp::min(32, ciphertext.len() - i);
-		for j in 0..block_size {
-			plain[i + j] = ciphertext[i + j] ^ keystream[j];
+	let mut substituted = Vec::with_capacity(combined.len());
+	for (idx, chunk) in combined.chunks(7).enumerate() {
+		if idx % 2 == 1 {
+			for &b in chunk.iter().rev() {
+				substituted.push(TRANSLATE[b as usize]);
+			}
+		} else {
+			for &b in chunk {
+				substituted.push(TRANSLATE[b as usize]);
+			}
 		}
 	}
 
-	if !plain.starts_with(b"SC01") {
-		bail!("Decoding scans failed");
-	}
+	let decoded = URL_SAFE_NO_PAD
+		.decode(&substituted)
+		.map_err(|_| error!("Failed to decode images base64"))?;
+	let json_str = String::from_utf8(decoded).map_err(|_| error!("Invalid images JSON"))?;
+	let parsed: serde_json::Value =
+		serde_json::from_str(&json_str).map_err(|_| error!("Failed to parse images JSON"))?;
+	let arr = parsed
+		.as_array()
+		.ok_or_else(|| error!("Expected images array"))?;
 
-	let decompressed = miniz_oxide::inflate::decompress_to_vec(&plain[4..])
-		.map_err(|_| error!("Failed to decompress scans"))?;
-	String::from_utf8(decompressed).map_err(|_| error!("Failed to decode scans utf8"))
+	let mut paths = Vec::with_capacity(arr.len());
+	for item in arr {
+		if let Some(path) = item.as_str() {
+			paths.push(path.to_string());
+		}
+	}
+	Ok(paths)
 }
 
-fn sha256(data: &[u8]) -> [u8; 32] {
-	let mut hasher = Sha256::new();
-	hasher.update(data);
-	hasher.finalize().into()
-}
-
-fn decode_hex(input: &str) -> Result<Vec<u8>> {
-	if !input.len().is_multiple_of(2) {
-		bail!("Invalid hex string");
+/// Decode base64 that may have its padding stripped (the site strips `=`).
+fn decode_b64(input: &str) -> Result<Vec<u8>> {
+	let mut padded = input.to_string();
+	let rem = padded.len() % 4;
+	if rem != 0 {
+		for _ in 0..(4 - rem) {
+			padded.push('=');
+		}
 	}
-	let mut out = Vec::with_capacity(input.len() / 2);
-	for chunk in input.as_bytes().chunks(2) {
-		let high = hex_value(chunk[0])?;
-		let low = hex_value(chunk[1])?;
-		out.push((high << 4) | low);
-	}
-	Ok(out)
-}
-
-fn hex_value(byte: u8) -> Result<u8> {
-	match byte {
-		b'0'..=b'9' => Ok(byte - b'0'),
-		b'a'..=b'f' => Ok(byte - b'a' + 10),
-		b'A'..=b'F' => Ok(byte - b'A' + 10),
-		_ => bail!("Invalid hex character"),
-	}
+	STANDARD
+		.decode(padded.as_bytes())
+		.map_err(|_| error!("Invalid base64"))
 }
