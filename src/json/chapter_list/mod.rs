@@ -80,12 +80,26 @@ impl ChapterList {
 					.or_else(|| item.get("created_at"))
 					.and_then(|v| v.as_str())
 					.and_then(parse_iso8601_to_epoch);
+				// Each chapter carries its own cover (`cover_image_url`, a
+				// relative `/tx/chapter/...` path on the cover CDN). Aidoku
+				// renders it as the thumbnail left of the chapter title.
+				let thumbnail = item
+					.get("cover_image_url")
+					.and_then(|v| v.as_str())
+					.map(|u| {
+						if u.starts_with("http") {
+							u.to_string()
+						} else {
+							format!("https://cover.s3imgs.top{}", u)
+						}
+					});
 
 				all_chapters.push(Chapter {
 					key: hid.clone(),
 					title: Some(title),
 					chapter_number: (chapter_number > 0.0).then_some(chapter_number as f32),
 					date_uploaded,
+					thumbnail,
 					url: Some(format!("{}/chapter/go?hid={}&m={}", BASE_URL, hid, mid)),
 					..Default::default()
 				});

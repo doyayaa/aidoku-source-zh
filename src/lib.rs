@@ -325,5 +325,21 @@ mod tests {
 			dated,
 			chapters.len()
 		);
+		// every chapter carries a cover thumbnail on the cover CDN.
+		let thumbed = chapters
+			.iter()
+			.filter(|c| {
+				c.thumbnail
+					.as_deref()
+					.unwrap_or_default()
+					.starts_with("https://cover.s3imgs.top/")
+			})
+			.count();
+		assert!(
+			thumbed == chapters.len(),
+			"every chapter should have a cover.s3imgs.top thumbnail (got {}/{})",
+			thumbed,
+			chapters.len()
+		);
 	}
 }
