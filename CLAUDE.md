@@ -98,10 +98,10 @@ If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/ru
 
 ## Deploy
 
-Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `public/index.json`/`public/index.min.json` (the Aidoku source list). The `gh-pages` branch carries the same files the app needs and is generated from the `master` `public/` directory. Repo: `doyayaa/aidoku-source-zh-hipmh`.
+Built `package.aix` is placed at `public/sources/zh.hipmh-v1.aix` alongside `public/index.json`/`public/index.min.json` (the Aidoku source list). The `gh-pages` branch carries the same files the app needs and is generated from the `master` `public/` directory. Repo: `doyayaa/aidoku-source-zh`.
 
 **Distribution entry point is `raw.githubusercontent.com`**, not GitHub Pages:
-- Source list URL: `https://raw.githubusercontent.com/doyayaa/aidoku-source-zh-hipmh/gh-pages/index.min.json`
+- Source list URL: `https://raw.githubusercontent.com/doyayaa/aidoku-source-zh/gh-pages/index.min.json`
 - `iconURL` and `downloadURL` MUST be **relative** paths (`icons/zh.hipmh-v2.png`, `sources/zh.hipmh-v2.aix`) resolved against the source-list URL. **Absolute URLs break import in Aidoku** (verified by user on 2026-08-12) — do not use absolute paths for these fields.
 - The `.aix`/icon filenames carry the version (`zh.hipmh-v{n}.aix`/`.png`, mirroring the manifest `version`). On version bump: change `version` in the manifest AND `res/source.json` `info.version`, rebuild, and rename the files in `public/` (a fresh filename also sidesteps raw CDN caching). The icon is the site logo saved as `public/icons/zh.hipmh-v2.png`.
 - GitHub Pages is NOT used: the repo's custom domain `doyayaa.online` is deprecated, and `doyayaa.github.io/...` still 301s to it (can't be cleared via API; needs web UI Settings → Pages → Custom domain → Clear if ever re-enabled).

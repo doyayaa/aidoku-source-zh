@@ -4,9 +4,9 @@ Aidoku 中文漫画图源，基于 [m.hipmh.com](https://m.hipmh.com)。
 
 ## 如何使用
 
-点击 [这里](https://aidoku.app/add-source-list/?url=https://raw.githubusercontent.com/doyayaa/aidoku-source-zh-hipmh/gh-pages/index.min.json) 将图源添加到 Aidoku 中。
+点击 [这里](https://aidoku.app/add-source-list/?url=https://raw.githubusercontent.com/doyayaa/aidoku-source-zh/gh-pages/index.min.json) 将图源添加到 Aidoku 中。
 
-如果添加不了，可以点击 [这里](https://aidoku.app/add-source-list/?url=https://cdn.jsdelivr.net/gh/doyayaa/aidoku-source-zh-hipmh@gh-pages/index.min.json) 试试。
+如果添加不了，可以点击 [这里](https://aidoku.app/add-source-list/?url=https://cdn.jsdelivr.net/gh/doyayaa/aidoku-source-zh@gh-pages/index.min.json) 试试。
 
 图源更新时，在 Aidoku 中刷新图源列表即可升级到最新版本。
 
