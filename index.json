@@ -11,6 +11,17 @@
 			"contentRating": 1,
 			"baseURL": "https://m.hipmh.com",
 			"minAppVersion": "0.7.1"
+		},
+		{
+			"id": "zh.bilimanga",
+			"name": "哔哩漫画",
+			"version": 3,
+			"iconURL": "icons/zh.bilimanga-v3.png",
+			"downloadURL": "sources/zh.bilimanga-v3.aix",
+			"languages": ["zh"],
+			"contentRating": 1,
+			"baseURL": "https://www.bilimanga.net",
+			"minAppVersion": "0.7.1"
 		}
 	]
 }
