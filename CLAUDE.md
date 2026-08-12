@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Aidoku Chinese manga source collection. Each source is its **own crate** in its own directory under `sources/{source-id}/` (mirroring [Aidoku-Community/sources](https://github.com/Aidoku-Community/sources)) so different sources don't mix. Currently hosts:
 
 - **`zh.hipmh`** — 嬉皮漫画 (https://m.hipmh.com). Based on the `zh.happymh` source from Aidoku-Community, adapted for hipmh.com; uses the redesigned site's `/v1/*` JSON APIs.
-- **`zh.bilimanga`** — 哔哩漫画 (https://www.bilimanga.net). Copied from Aidoku-Community; pure HTML scraper.
+- **`zh.bilimanga`** — 嗶哩漫畫 (https://www.bilimanga.net). Copied from Aidoku-Community; pure HTML scraper.
 
 Each source ships its own `package.aix` (a zip with `Payload/main.wasm` + `res/*`) and pins its **own aidoku-rs git rev** via its committed `Cargo.lock` — the two crates currently use different revs (`zh.hipmh` → `1a6bb691`, `zh.bilimanga` → `b0818704`), so they must stay separate crates and never be merged into one.
 
@@ -100,7 +100,7 @@ If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/ru
 
 ## Architecture — zh.bilimanga (pure HTML scraper)
 
-Copied from Aidoku-Community (2026-08), `aes` dependency removed (never used). Source id `zh.bilimanga` (哔哩漫画), `BASE_URL = "https://www.bilimanga.net"`. Deps: `aidoku {json}` + `regex` (chapter-number extraction). **All requests** send `User-Agent: <mobile UA>` (a desktop Chrome UA makes the reader serve a "请使用手机浏览器" page with no images), `Origin: <BASE_URL>`, `Accept-Language: zh-CN,zh;q=0.9`, `Cookie: night=0`.
+Copied from Aidoku-Community (2026-08), `aes` dependency removed (never used). Source id `zh.bilimanga` (嗶哩漫畫), `BASE_URL = "https://www.bilimanga.net"`. Deps: `aidoku {json}` + `regex` (chapter-number extraction). **All requests** send `User-Agent: <mobile UA>` (a desktop Chrome UA makes the reader serve a "请使用手机浏览器" page with no images), `Origin: <BASE_URL>`, `Accept-Language: zh-CN,zh;q=0.9`, `Cookie: night=0`.
 
 ```
 sources/zh.bilimanga/src/
