@@ -85,6 +85,8 @@ If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/ru
 ### HTML parsing (html/mod.rs)
 `update_details` parses the `/works/{base64_id}` page (id-only URL works, no slug needed). Uses attribute selectors (SwiftSoup, full CSS): `[data-manga-title]` and `[data-cover-url]` on the app container, `#d-info-content p` (description), `a[href^="/author/"]` (authors), `a[href^="/genre/"]` (tags). Status: presence of `a[href='/completed']`/`a[href='/ongoing']` → `MangaStatus`. `Viewer::Webtoon` is set for all manga.
 
+**Base64 padding gotcha (v4 fix):** the `/works/{id}` base64 in site URLs is **padding-stripped** (`bToyMzQ3NQ`, never `bToyMzQ3NQ==`). `STANDARD.encode(key)` emits `=` padding; a padded path 404s on the Nuxt router (only manga whose id length yields no padding — e.g. `m:9711` → `bTo5NzEx` — appeared to work). `key_to_works_id` MUST `.trim_end_matches('=')`. A 404 detail page silently clears `manga.cover` (no `[data-cover-url]`) and sets `manga.url` to the dead URL. Decoding is unaffected (STANDARD engine accepts unpadded input).
+
 ### Deep Link Handling
 - `/works/{base64_id}--{slug}` — base64-decodes the ID (decodes to `m:{numeric_id}`), used as the manga key
 - `/manga/{id}` and `/manga/{id}/{chapter_id}` — direct internal links

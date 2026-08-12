@@ -174,10 +174,12 @@ fn works_slug_to_key(slug: &str) -> String {
 }
 
 /// Convert a manga key (e.g. "m:23475") back to the leading `/works/` ID segment
-/// used in detail-page URLs (base64-encodes to "bToyMzQ3NQ").
+/// used in detail-page URLs. The site's canonical form strips base64 padding:
+/// `m:23475` -> `bToyMzQ3NQ`, NOT `bToyMzQ3NQ==` (a padded path 404s on the
+/// Nuxt router). `STANDARD.encode` emits the padding, so trim it here.
 fn key_to_works_id(key: &str) -> String {
 	use base64::{Engine as _, engine::general_purpose::STANDARD};
-	STANDARD.encode(key)
+	STANDARD.encode(key).trim_end_matches('=').to_string()
 }
 
 /// Parse a `/v1/mangas` or `/v1/search` response into a `MangaPageResult`.
