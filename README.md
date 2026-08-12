@@ -12,8 +12,12 @@ Aidoku 中文漫画图源集合，每个图源一个独立目录（`sources/{id}
 
 ## 图源列表
 
-- [嬉皮漫画](https://m.hipmh.com)
-- [哔哩漫画](https://www.bilimanga.net)
+| 图源 | 版本 | 说明 |
+|------|------|------|
+| [嬉皮漫画](https://m.hipmh.com) | v8 | 基于站点 `/v1` JSON API；分类、搜索、章节、阅读均可用 |
+| [哔哩漫画](https://www.bilimanga.net) | v3 | HTML 解析；分类/浏览、章节、阅读可用；搜索受站点 Cloudflare 限制 |
+
+> **哔哩漫画搜索说明**：站点已将搜索改为前端 JS + Cloudflare 保护，非浏览器请求直接返回空页。图源内搜索可能显示无结果，是否可用取决于网络环境（家用 IP / Aidoku 网络栈可能通过）。
 
 ## 从源码构建
 
