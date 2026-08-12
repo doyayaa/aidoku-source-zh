@@ -156,10 +156,23 @@ impl ListingProvider for Hipmh {
 }
 
 /// Decode hipmh's base64 work ID format (e.g., "bToxNTAzMQ" -> "m:15031")
-/// The base64 decodes to "m:{numeric_id}"
+/// The base64 decodes to "m:{numeric_id}".
+///
+/// The site's IDs are padding-stripped, but base64 0.22's `STANDARD` engine
+/// requires canonical `=` padding (RequireCanonical). An unpadded ID like
+/// "bToyMzQ3NQ" (10 chars, 2 padding chars stripped) otherwise fails to
+/// decode and the raw string leaks through as the manga key, which then gets
+/// double-encoded into a wrong `/works/` URL. Strip any existing padding and
+/// re-pad to canonical form before decoding.
 fn decode_work_id(encoded: &str) -> String {
 	use base64::{Engine as _, engine::general_purpose::STANDARD};
-	match STANDARD.decode(encoded) {
+	let stripped = encoded.trim_end_matches('=');
+	let padded = match stripped.len() % 4 {
+		2 => format!("{}==", stripped),
+		3 => format!("{}=", stripped),
+		_ => stripped.to_string(),
+	};
+	match STANDARD.decode(&padded) {
 		Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|_| encoded.into()),
 		Err(_) => encoded.into(),
 	}
@@ -266,3 +279,25 @@ register_source!(
 	ImageRequestProvider,
 	DeepLinkHandler
 );
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn works_id_roundtrip_strips_padding() {
+		// Encode side: padded base64 must strip to the site's canonical form.
+		assert_eq!(key_to_works_id("m:23475"), "bToyMzQ3NQ");
+		// No-padding ID stays unchanged.
+		assert_eq!(key_to_works_id("m:9711"), "bTo5NzEx");
+		// Decode side: unpadded IDs must decode (base64 0.22 STANDARD needs canonical padding).
+		assert_eq!(decode_work_id("bToyMzQ3NQ"), "m:23475"); // 一人之下
+		assert_eq!(decode_work_id("bTo5NzEx"), "m:9711"); // 从大树开始进化 (no padding)
+		assert_eq!(decode_work_id("bToxNTAzMQ"), "m:15031"); // deep-link sample
+		// Already-padded input still decodes.
+		assert_eq!(decode_work_id("bToyMzQ3NQ=="), "m:23475");
+		// Full round trip: slug first segment -> key -> back to slug first segment.
+		assert_eq!(key_to_works_id(&decode_work_id("bToyMzQ3NQ")), "bToyMzQ3NQ");
+	}
+}

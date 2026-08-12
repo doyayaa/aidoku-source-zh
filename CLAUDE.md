@@ -85,7 +85,10 @@ If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/ru
 ### HTML parsing (html/mod.rs)
 `update_details` parses the `/works/{base64_id}` page (id-only URL works, no slug needed). Uses attribute selectors (SwiftSoup, full CSS): `[data-manga-title]` and `[data-cover-url]` on the app container, `#d-info-content p` (description), `a[href^="/author/"]` (authors), `a[href^="/genre/"]` (tags). Status: presence of `a[href='/completed']`/`a[href='/ongoing']` → `MangaStatus`. `Viewer::Webtoon` is set for all manga.
 
-**Base64 padding gotcha (v4 fix):** the `/works/{id}` base64 in site URLs is **padding-stripped** (`bToyMzQ3NQ`, never `bToyMzQ3NQ==`). `STANDARD.encode(key)` emits `=` padding; a padded path 404s on the Nuxt router (only manga whose id length yields no padding — e.g. `m:9711` → `bTo5NzEx` — appeared to work). `key_to_works_id` MUST `.trim_end_matches('=')`. A 404 detail page silently clears `manga.cover` (no `[data-cover-url]`) and sets `manga.url` to the dead URL. Decoding is unaffected (STANDARD engine accepts unpadded input).
+**Base64 padding gotcha (v5):** the `/works/{id}` base64 in site URLs is **padding-stripped** (`bToyMzQ3NQ`, never `bToyMzQ3NQ==`). base64 0.22's `STANDARD` engine requires canonical `=` padding on **decode** too (RequireCanonical), so both directions need padding handling:
+- `decode_work_id` (slug first segment → key) MUST re-pad before decoding — `trim_end_matches('=')` then pad to len%4==0. Otherwise an unpadded ID like `bToyMzQ3NQ` fails to decode and the raw string leaks through as the manga key, which then gets double-encoded into a wrong `/works/` URL → 404, and `update_details` on the 404 page clears `manga.cover` (no `[data-cover-url]`). Only manga whose id yields no padding (e.g. `m:9711` → `bTo5NzEx`, 8 chars) worked.
+- `key_to_works_id` (key → URL segment) MUST `.trim_end_matches('=')` off `STANDARD.encode`'s output (padded paths 404 on the Nuxt router).
+- Invariants are covered by the `#[aidoku_test]` round-trip test in `src/lib.rs` (run via `cargo +nightly test` — needs `aidoku-test-runner` installed and the `[target.wasm32-unknown-unknown] runner` line in `.cargo/config.toml`).
 
 ### Deep Link Handling
 - `/works/{base64_id}--{slug}` — base64-decodes the ID (decodes to `m:{numeric_id}`), used as the manga key
