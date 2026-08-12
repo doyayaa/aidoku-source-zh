@@ -317,5 +317,13 @@ mod tests {
 			first,
 			last
 		);
+		// update dates are populated from updated_at/created_at.
+		let dated = chapters.iter().filter(|c| c.date_uploaded.is_some()).count();
+		assert!(
+			dated == chapters.len(),
+			"every chapter should have a date_uploaded (got {}/{})",
+			dated,
+			chapters.len()
+		);
 	}
 }

@@ -4,9 +4,9 @@
 		{
 			"id": "zh.hipmh",
 			"name": "嬉皮漫画",
-			"version": 6,
-			"iconURL": "icons/zh.hipmh-v6.png",
-			"downloadURL": "sources/zh.hipmh-v6.aix",
+			"version": 7,
+			"iconURL": "icons/zh.hipmh-v7.png",
+			"downloadURL": "sources/zh.hipmh-v7.aix",
 			"languages": ["zh"],
 			"contentRating": 1,
 			"baseURL": "https://m.hipmh.com",
