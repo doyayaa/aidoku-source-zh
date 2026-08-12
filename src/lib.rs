@@ -300,4 +300,22 @@ mod tests {
 		// Full round trip: slug first segment -> key -> back to slug first segment.
 		assert_eq!(key_to_works_id(&decode_work_id("bToyMzQ3NQ")), "bToyMzQ3NQ");
 	}
+
+	#[aidoku_test]
+	fn chapter_list_parallel_fetch() {
+		// 一人之下 (m:23475): ~809 chapters across 17 pages (per_page cap 50).
+		// Don't assert an exact count — the manga gains chapters over time.
+		let chapters = crate::json::chapter_list::ChapterList::get_chapters("m:23475")
+			.expect("get_chapters should succeed");
+		assert!(!chapters.is_empty(), "expected chapters");
+		// order=desc => newest chapter first.
+		let first = chapters[0].chapter_number.unwrap_or(0.0);
+		let last = chapters[chapters.len() - 1].chapter_number.unwrap_or(0.0);
+		assert!(
+			first > last,
+			"chapters should be newest-first (got first={} last={})",
+			first,
+			last
+		);
+	}
 }
