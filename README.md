@@ -1,4 +1,4 @@
-# 嬉皮漫画图源
+# Aidoku中文漫画源
 
 Aidoku 中文漫画图源，基于 [m.hipmh.com](https://m.hipmh.com)。
 
