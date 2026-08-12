@@ -1,4 +1,6 @@
 /target
+sources/*/target/
 Cargo.lock
+!sources/*/Cargo.lock
 package.aix
 .probe*
