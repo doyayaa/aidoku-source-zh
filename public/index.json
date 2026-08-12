@@ -15,9 +15,9 @@
 		{
 			"id": "zh.bilimanga",
 			"name": "哔哩漫画",
-			"version": 3,
-			"iconURL": "icons/zh.bilimanga-v3.png",
-			"downloadURL": "sources/zh.bilimanga-v3.aix",
+			"version": 4,
+			"iconURL": "icons/zh.bilimanga-v4.png",
+			"downloadURL": "sources/zh.bilimanga-v4.aix",
 			"languages": ["zh"],
 			"contentRating": 1,
 			"baseURL": "https://www.bilimanga.net",
