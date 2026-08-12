@@ -13,7 +13,7 @@ Aidoku 中文漫画图源集合，每个图源一个独立目录（`sources/{id}
 ## 图源列表
 
 - [嬉皮漫画](https://m.hipmh.com)
-- [嗶哩漫畫](https://www.bilimanga.net)
+- [哔哩漫画](https://www.bilimanga.net)
 
 ## 从源码构建
 

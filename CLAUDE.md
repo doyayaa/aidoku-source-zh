@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Aidoku Chinese manga source collection. Each source is its **own crate** in its own directory under `sources/{source-id}/` (mirroring [Aidoku-Community/sources](https://github.com/Aidoku-Community/sources)) so different sources don't mix. Currently hosts:
 
 - **`zh.hipmh`** — 嬉皮漫画 (https://m.hipmh.com). Based on the `zh.happymh` source from Aidoku-Community, adapted for hipmh.com; uses the redesigned site's `/v1/*` JSON APIs.
-- **`zh.bilimanga`** — 嗶哩漫畫 (https://www.bilimanga.net). Copied from Aidoku-Community; pure HTML scraper.
+- **`zh.bilimanga`** — 哔哩漫画 (https://www.bilimanga.net). Copied from Aidoku-Community; pure HTML scraper.
 
 Each source ships its own `package.aix` (a zip with `Payload/main.wasm` + `res/*`) and pins its **own aidoku-rs git rev** via its committed `Cargo.lock` — the two crates currently use different revs (`zh.hipmh` → `1a6bb691`, `zh.bilimanga` → `b0818704`), so they must stay separate crates and never be merged into one.
 
@@ -100,7 +100,7 @@ If image decoding breaks, re-verify against the live `reader.hipmh.top/assets/ru
 
 ## Architecture — zh.bilimanga (pure HTML scraper)
 
-Copied from Aidoku-Community (2026-08), `aes` dependency removed (never used). Source id `zh.bilimanga` (嗶哩漫畫), `BASE_URL = "https://www.bilimanga.net"`. Deps: `aidoku {json}` + `regex` (chapter-number extraction). **All requests** send `User-Agent: <mobile UA>` (a desktop Chrome UA makes the reader serve a "请使用手机浏览器" page with no images), `Origin: <BASE_URL>`, `Accept-Language: zh-CN,zh;q=0.9`, `Cookie: night=0`.
+Copied from Aidoku-Community (2026-08), `aes` dependency removed (never used). Source id `zh.bilimanga` (哔哩漫画), `BASE_URL = "https://www.bilimanga.net"`. Deps: `aidoku {json}` + `regex` (chapter-number extraction). **All requests** send `User-Agent: <mobile UA>` (a desktop Chrome UA makes the reader serve a "请使用手机浏览器" page with no images), `Origin: <BASE_URL>`, `Accept-Language: zh-CN,zh;q=0.9`, `Cookie: night=0`.
 
 ```
 sources/zh.bilimanga/src/
@@ -111,12 +111,12 @@ sources/zh.bilimanga/src/
 
 - **Search** — `/search.html?searchkey={q}` (page 1) or `/search/{q}_{page}.html`; a non-empty text filter becomes a search, an `author` filter hits `/author/{value}.html`.
 - **Browse/filters** — default is the 12-segment `/filter/{order}_{tagid}_{isfull}_{anime}_{rgroupid}_{sortid}_{update}_{quality}_{page}_0_0_0.html` (the upstream 10-segment format `..._0.html` 404s since the redesign). Positions verified: page at segment 9, sortid at 6, isfull at 3.
-  - **作品分类 (v5)**: builds the site's **named category URL** `/filter/{slug}/{page}.html` instead of the numeric `sortid` segment — the numeric sortid only covers a subset (科幻未来 sortid=8 is flaky, 奇异幻想 sortid=9 404s). Slug map `CATEGORY_SLUGS` in `net/mod.rs`: 奇幻冒险→FantasyAdventure, 战斗热血→Action, 悬疑惊悚→SuspenseHorror, 校园青春→SchoolLife, 爱情浪漫→Romance, 职场都市→Workplace, 历史文化→Historical, 科幻未来→**ScienceFiction** (the site's own `Sci-Fi` slug 404s), 奇异幻想→Supernatural, 治愈温馨→Healing, 末日生存→Survival, 其他分类→Other.
-  - **作品主题 (v5)**: changed from multi-select to **single-select** (`tagid = value`) — multi-value tagids (`1-2`) 404 on the site; only single works. `filters.json` gained a "不限" (id 0) option.
+  - **作品分类 (v3)**: builds the site's **named category URL** `/filter/{slug}/{page}.html` instead of the numeric `sortid` segment — the numeric sortid only covers a subset (科幻未来 sortid=8 is flaky, 奇异幻想 sortid=9 404s). Slug map `CATEGORY_SLUGS` in `net/mod.rs`: 奇幻冒险→FantasyAdventure, 战斗热血→Action, 悬疑惊悚→SuspenseHorror, 校园青春→SchoolLife, 爱情浪漫→Romance, 职场都市→Workplace, 历史文化→Historical, 科幻未来→**ScienceFiction** (the site's own `Sci-Fi` slug 404s), 奇异幻想→Supernatural, 治愈温馨→Healing, 末日生存→Survival, 其他分类→Other.
+  - **作品主题 (v3)**: changed from multi-select to **single-select** (`tagid = value`) — multi-value tagids (`1-2`) 404 on the site; only single works. `filters.json` gained a "不限" (id 0) option.
 - **Manga detail** — `/detail/{id}.html`; parse `.book-cover` (cover), `h1.book-title`, `.authorname,.illname` (authors), `.book-summary>content` (description), `.tag-small-group>.tag-small>a` (tags), `.book-layout-inline` (first `|`-field → status 連載=Ongoing/完結=Completed). `Viewer` from tags: 大陸/韓國 → Webtoon, 日本 → RightToLeft, else LeftToRight. An `.aui-ver-form` block means removed content — its text goes into `manga.description`.
 - **Chapter list** — `/read/{id}/catalog`; group by `.catalog-volume` (volume number from the `<h3>`), chapters via `.chapter-li-a`. Some volumes' links are `javascript:` — those fetch the volume's own page (`{BASE_URL}{vol_href}` with `Origin` header) to get real links. `volume_thumbnail` (`.volume-cover-img img[data-src]`) is set as each chapter's `thumbnail`. Chapters are `reverse()`d (newest first).
 - **Pages** — `/read/{manga_id}/{chapter_id}.html`; images are `#acontentz>img[data-src]`. The images themselves live on `i.motiezw.com`, which is Cloudflare-gated at the IP level (my datacenter IP gets 403; a residential IP / the Aidoku app should pass).
-- **Search (v5 note, site-side blocked)** — the site's `/search.html` (form field `searchkey`, POST on the site) returns an empty body (HTTP 200, 0 bytes) to all non-browser HTTP clients (GET/POST, `searchkey`/`keyword`, with session cookies, full browser headers + client hints, and the source's own headers) — verified 2026-08-12. Search results are loaded client-side behind Cloudflare; there is no server-rendered results URL (sitemap has none) and no discoverable JSON API. The source keeps the original `/search.html?searchkey={q}` / `/search/{q}_{page}.html` URLs (matches the site form), so it may work in the Aidoku app's real HTTP stack where curl is gated — but no source-side change can guarantee it. If the user reports search still empty in-app, the site has gated it and search is effectively unavailable for this source.
+- **Search (v3 note, site-side blocked)** — the site's `/search.html` (form field `searchkey`, POST on the site) returns an empty body (HTTP 200, 0 bytes) to all non-browser HTTP clients (GET/POST, `searchkey`/`keyword`, with session cookies, full browser headers + client hints, and the source's own headers) — verified 2026-08-12. Search results are loaded client-side behind Cloudflare; there is no server-rendered results URL (sitemap has none) and no discoverable JSON API. The source keeps the original `/search.html?searchkey={q}` / `/search/{q}_{page}.html` URLs (matches the site form), so it may work in the Aidoku app's real HTTP stack where curl is gated — but no source-side change can guarantee it. If the user reports search still empty in-app, the site has gated it and search is effectively unavailable for this source.
 - **Images** — `ImageRequestProvider` sets `Referer: <BASE_URL>`.
 - **has_next_page** (manga list) — from `#pagelink`: `strong` (current) vs `.last`, else `.next` href != `#`.
 
@@ -126,7 +126,7 @@ Each built `sources/{id}/package.aix` is versioned into `public/` (`public/sourc
 
 **Distribution entry point is `raw.githubusercontent.com`**, not GitHub Pages:
 - Source list URL: `https://raw.githubusercontent.com/doyayaa/aidoku-source-zh/gh-pages/index.min.json`
-- `iconURL` and `downloadURL` MUST be **relative** paths (`icons/zh.hipmh-v8.png`, `sources/zh.bilimanga-v5.aix`) resolved against the source-list URL. **Absolute URLs break import in Aidoku** (verified by user on 2026-08-12) — do not use absolute paths for these fields.
+- `iconURL` and `downloadURL` MUST be **relative** paths (`icons/zh.hipmh-v8.png`, `sources/zh.bilimanga-v3.aix`) resolved against the source-list URL. **Absolute URLs break import in Aidoku** (verified by user on 2026-08-12) — do not use absolute paths for these fields.
 - GitHub Pages is NOT used: the repo's custom domain `doyayaa.online` is deprecated, and `doyayaa.github.io/...` still 301s to it (can't be cleared via API; needs web UI Settings → Pages → Custom domain → Clear if ever re-enabled).
 
 **The manifest MUST be the new `{"name": ..., "sources": [...]}` format** (fields `iconURL`/`downloadURL`/`languages`/`contentRating`/`baseURL`/`minAppVersion`). The old flat-array format (`file`/`icon`/`lang`/`nsfw`) causes Aidoku to label the whole source list "旧版图源" (legacy). Keep `public/` and the `gh-pages` branch in sync. The hipmh `iconURL` is an absolute remote URL (`https://m.hipmh.com/assets/logo.C1THqItK.png`, the site's logo); `public/icons/zh.hipmh-v1.png` is a legacy local copy no longer referenced.
