@@ -302,6 +302,43 @@ mod tests {
 	}
 
 	#[aidoku_test]
+	fn page_list_image_base_maps_line_to_live_host() {
+		// The API's `line` is NOT a host number. hip-tx-{n} only exists for
+		// n ∈ {1, 2}; line=3 (common on 从大树开始进化) must map to the default
+		// hip-tx-1 host, not the NXDOMAIN hip-tx-3. Only line==9 uses the secure host.
+		use crate::json::page_list::image_base;
+		assert_eq!(image_base(1), "https://hip-tx-1.s3imgs.top");
+		assert_eq!(image_base(2), "https://hip-tx-1.s3imgs.top");
+		assert_eq!(image_base(3), "https://hip-tx-1.s3imgs.top");
+		assert_eq!(image_base(0), "https://hip-tx-1.s3imgs.top");
+		assert_eq!(image_base(9), "https://hip-tx-s1.s3imgs.top");
+	}
+
+	#[aidoku_test]
+	fn page_list_line3_chapter_builds_live_url() {
+		// 从大树开始进化 ch.1 (m:9711) returns `line=3` from /v2/chapter.
+		// The page URLs must be served from the live hip-tx-1 host — building
+		// hip-tx-3.s3imgs.top (NXDOMAIN) is what broke image loading for this
+		// manga in the app.
+		let pages = crate::json::page_list::PageList::get_pages(
+			"m:9711".into(),
+			"bTo5NzExLWM6NTY0OQ-OTcxMToxLjAw".into(),
+		)
+		.expect("get_pages should succeed");
+		assert!(!pages.is_empty(), "expected pages");
+		for page in pages.iter().take(3) {
+			match &page.content {
+				aidoku::PageContent::Url(url, _) => assert!(
+					url.starts_with("https://hip-tx-1.s3imgs.top/"),
+					"expected hip-tx-1 URL, got: {}",
+					url
+				),
+				_ => panic!("expected url page content"),
+			}
+		}
+	}
+
+	#[aidoku_test]
 	fn chapter_list_parallel_fetch() {
 		// 一人之下 (m:23475): ~809 chapters across 17 pages (per_page cap 50).
 		// Don't assert an exact count — the manga gains chapters over time.

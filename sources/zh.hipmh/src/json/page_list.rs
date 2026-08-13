@@ -9,7 +9,13 @@ use base64::{Engine as _, engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}};
 
 const CHAPTER_API: &str = "https://hipapi1.s3file.top/v2/chapter";
 const READER_ORIGIN: &str = "https://reader.hipmh.top";
-const IMAGE_BASE: &str = "https://hip-tx-";
+// Image CDN hosts. The site's reader maps the API's `line` field onto a fixed
+// set of hosts — NOT `hip-tx-{line}`. Default (line1 pref) is hip-tx-1; the
+// only special case in the reader JS is `line === 9`, which switches to the
+// hip-tx-s1 "secure" CDN. Building `hip-tx-{n}` for n >= 3 yields a host that
+// does not resolve (NXDOMAIN), so we never derive the base from the number.
+const IMAGE_BASE: &str = "https://hip-tx-1.s3imgs.top";
+const IMAGE_BASE_SECURE: &str = "https://hip-tx-s1.s3imgs.top";
 
 // Scrambled url-safe base64 alphabet used by the reader (FROM -> TO substitution).
 const FROM: &[u8] = b"_-9876543210abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -53,10 +59,12 @@ impl PageList {
 			.get("images")
 			.and_then(|v| v.as_str())
 			.ok_or_else(|| error!("Expected images string"))?;
+		// Only `line == 9` selects a different host (the reader's "secure" CDN);
+		// every other value — 1, 3, … — serves from the default hip-tx-1 host.
 		let line = data.get("line").and_then(|v| v.as_i64()).unwrap_or(1);
+		let base = image_base(line);
 
 		let paths = decode_images(images)?;
-		let base = format!("{}{}.s3imgs.top", IMAGE_BASE, line);
 		let mut pages = Vec::with_capacity(paths.len());
 		for path in paths {
 			pages.push(Page {
@@ -65,6 +73,19 @@ impl PageList {
 			});
 		}
 		Ok(pages)
+	}
+}
+
+/// Select the image CDN host for a chapter, mirroring the site's reader JS:
+/// `line == 9` uses the "secure" host (`hip-tx-s1`); every other value — 1, 3,
+/// … — serves from the default host. Never build `hip-tx-{line}` directly: the
+/// `hip-tx-{n}` hosts only exist for n ∈ {1, 2}, so a raw line of 3+ resolves
+/// to an NXDOMAIN host and every page fails to load.
+pub(crate) fn image_base(line: i64) -> &'static str {
+	if line == 9 {
+		IMAGE_BASE_SECURE
+	} else {
+		IMAGE_BASE
 	}
 }
 
