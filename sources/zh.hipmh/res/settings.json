@@ -1,0 +1,14 @@
+[
+	{
+		"type": "group",
+		"title": "视图选择",
+		"items": [
+			{
+				"type": "segment",
+				"key": "isListView",
+				"title": "主页详情视图",
+				"options": ["网格", "列表"]
+			}
+		]
+	}
+]

@@ -1,7 +1,9 @@
 #![no_std]
 
+mod home;
 mod html;
 mod json;
+mod settings;
 
 use aidoku::{
 	Chapter, DeepLinkHandler, DeepLinkResult, ImageRequestProvider, Listing, ListingProvider,
@@ -130,29 +132,39 @@ impl DeepLinkHandler for Hipmh {
 
 impl ListingProvider for Hipmh {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		let url = match listing.id.as_str() {
-			"popularity" => format!("{}?sort=popular&page={}&per_page=18", API_URL, page),
-			"weekly" => format!("{}?sort=weekly&page={}&per_page=18", API_URL, page),
-			"newReleases" => format!("{}?sort=latest&page={}&per_page=18", API_URL, page),
-			"completed" => format!(
-				"{}?status=completed&sort=popular&page={}&per_page=18",
-				API_URL, page
-			),
-			"ongoing" => format!(
-				"{}?status=ongoing&sort=popular&page={}&per_page=18",
-				API_URL, page
-			),
-			_ => bail!("Invalid listing"),
-		};
-
-		let json: serde_json::Value = Request::get(url)?
-			.header("Origin", BASE_URL)
-			.header("Referer", BASE_URL)
-			.send()?
-			.get_json()?;
-
-		parse_manga_list(json, page)
+		fetch_manga_page(listing_url(&listing.id, page)?, page)
 	}
+}
+
+/// Map a listing id to its `/v1/mangas` browse URL.
+fn listing_url(listing_id: &str, page: i32) -> Result<String> {
+	let url = match listing_id {
+		"popularity" => format!("{}?sort=popular&page={}&per_page=18", API_URL, page),
+		"weekly" => format!("{}?sort=weekly&page={}&per_page=18", API_URL, page),
+		"newReleases" => format!("{}?sort=latest&page={}&per_page=18", API_URL, page),
+		"completed" => format!(
+			"{}?status=completed&sort=popular&page={}&per_page=18",
+			API_URL, page
+		),
+		"ongoing" => format!(
+			"{}?status=ongoing&sort=popular&page={}&per_page=18",
+			API_URL, page
+		),
+		_ => {
+			bail!("Invalid listing");
+		}
+	};
+	Ok(url)
+}
+
+/// Fetch a `/v1/mangas` URL and parse it into a manga page result.
+fn fetch_manga_page(url: String, page: i32) -> Result<MangaPageResult> {
+	let json: serde_json::Value = Request::get(url)?
+		.header("Origin", BASE_URL)
+		.header("Referer", BASE_URL)
+		.send()?
+		.get_json()?;
+	parse_manga_list(json, page)
 }
 
 /// Decode hipmh's base64 work ID format (e.g., "bToxNTAzMQ" -> "m:15031")
@@ -237,10 +249,30 @@ fn parse_manga_list(json: serde_json::Value, page: i32) -> Result<MangaPageResul
 				}
 			})
 			.unwrap_or_default();
+		let authors = item
+			.get("author_names")
+			.and_then(|v| v.as_array())
+			.map(|arr| {
+				arr.iter()
+					.filter_map(|a| a.as_str().map(|s| s.to_string()))
+					.collect::<Vec<String>>()
+			})
+			.filter(|v| !v.is_empty());
+		let tags = item
+			.get("genres")
+			.and_then(|v| v.as_array())
+			.map(|arr| {
+				arr.iter()
+					.filter_map(|g| g.as_str().map(|s| s.to_string()))
+					.collect::<Vec<String>>()
+			})
+			.filter(|v| !v.is_empty());
 		mangas.push(Manga {
 			key: works_slug_to_key(mid),
 			cover: Some(cover),
 			title,
+			authors,
+			tags,
 			..Default::default()
 		});
 	}
@@ -276,6 +308,7 @@ fn build_mangas_filter_url(page: i32, filters: &[aidoku::FilterValue]) -> String
 register_source!(
 	Hipmh,
 	ListingProvider,
+	Home,
 	ImageRequestProvider,
 	DeepLinkHandler
 );
@@ -283,6 +316,7 @@ register_source!(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use aidoku::Home;
 	use aidoku_test::aidoku_test;
 
 	#[aidoku_test]
@@ -378,5 +412,47 @@ mod tests {
 			thumbed,
 			chapters.len()
 		);
+	}
+
+	#[aidoku_test]
+	fn listing_urls_map_to_v1_mangas() {
+		assert_eq!(
+			listing_url("popularity", 1).unwrap(),
+			"https://hipapi1.s3file.top/v1/mangas?sort=popular&page=1&per_page=18"
+		);
+		assert_eq!(
+			listing_url("weekly", 2).unwrap(),
+			"https://hipapi1.s3file.top/v1/mangas?sort=weekly&page=2&per_page=18"
+		);
+		assert_eq!(
+			listing_url("newReleases", 1).unwrap(),
+			"https://hipapi1.s3file.top/v1/mangas?sort=latest&page=1&per_page=18"
+		);
+		assert_eq!(
+			listing_url("completed", 1).unwrap(),
+			"https://hipapi1.s3file.top/v1/mangas?status=completed&sort=popular&page=1&per_page=18"
+		);
+		assert_eq!(
+			listing_url("ongoing", 1).unwrap(),
+			"https://hipapi1.s3file.top/v1/mangas?status=ongoing&sort=popular&page=1&per_page=18"
+		);
+		assert!(listing_url("bogus", 1).is_err());
+	}
+
+	#[aidoku_test]
+	fn home_popular_listing_has_entries() {
+		let page = fetch_manga_page(listing_url("popularity", 1).unwrap(), 1)
+			.expect("popular listing fetch should succeed");
+		assert!(!page.entries.is_empty(), "popular listing should have entries");
+		assert!(
+			page.entries.iter().all(|m| m.authors.is_some()),
+			"catalog entries should carry authors for the home banner"
+		);
+	}
+
+	#[aidoku_test]
+	fn home_get_home_succeeds() {
+		// Streams via send_partial_result (no-op in the runner); verify the flow runs without error.
+		Hipmh::new().get_home().expect("get_home should succeed");
 	}
 }
