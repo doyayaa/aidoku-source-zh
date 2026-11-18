@@ -150,6 +150,7 @@ fn listing_url(listing_id: &str, page: i32) -> Result<String> {
 			"{}?status=ongoing&sort=popular&page={}&per_page=18",
 			API_URL, page
 		),
+		"highScoreKorean" => format!("{}?tag=69&sort=popular&page={}&per_page=18", API_URL, page),
 		_ => {
 			bail!("Invalid listing");
 		}
@@ -316,7 +317,7 @@ register_source!(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use aidoku::Home;
+	use aidoku::{Home, HomeComponentValue};
 	use aidoku_test::aidoku_test;
 
 	#[aidoku_test]
@@ -436,6 +437,10 @@ mod tests {
 			listing_url("ongoing", 1).unwrap(),
 			"https://hipapi1.s3file.top/v1/mangas?status=ongoing&sort=popular&page=1&per_page=18"
 		);
+		assert_eq!(
+			listing_url("highScoreKorean", 1).unwrap(),
+			"https://hipapi1.s3file.top/v1/mangas?tag=69&sort=popular&page=1&per_page=18"
+		);
 		assert!(listing_url("bogus", 1).is_err());
 	}
 
@@ -451,8 +456,26 @@ mod tests {
 	}
 
 	#[aidoku_test]
-	fn home_get_home_succeeds() {
-		// Streams via send_partial_result (no-op in the runner); verify the flow runs without error.
-		Hipmh::new().get_home().expect("get_home should succeed");
+	fn home_mirrors_recommendation_page() {
+		let layout = Hipmh::new().get_home().expect("get_home should succeed");
+		assert!(
+			layout.components.len() >= 5,
+			"home should have banner + recent updates + manga sections (got {})",
+			layout.components.len()
+		);
+		assert!(
+			layout
+				.components
+				.iter()
+				.any(|c| matches!(&c.value, HomeComponentValue::ImageScroller { .. })),
+			"home should include the top banner ImageScroller"
+		);
+	}
+
+	#[aidoku_test]
+	fn home_high_score_korean_listing_has_entries() {
+		let page = fetch_manga_page(listing_url("highScoreKorean", 1).unwrap(), 1)
+			.expect("high-score Korean listing fetch should succeed");
+		assert!(!page.entries.is_empty(), "high-score Korean listing should have entries");
 	}
 }

@@ -1,14 +1,13 @@
-use crate::{BASE_URL, Hipmh, listing_url, parse_manga_list, settings};
+use crate::{BASE_URL, Hipmh, settings, works_slug_to_key};
 use aidoku::{
-	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Listing, ListingKind,
-	MangaPageResult, Result,
-	alloc::{Vec, vec},
-	imports::{net::Request, std::send_partial_result},
+	Home, HomeComponent, HomeComponentValue, HomeLayout, Link, LinkValue, Listing, ListingKind,
+	Manga, Result,
+	alloc::{String, Vec},
+	imports::net::Request,
 };
 
-fn send_component(component: HomeComponent) {
-	send_partial_result(&HomePartialResult::Component(component));
-}
+// The home page is Astro SSR; a mobile UA gets the full server-rendered layout.
+const MOBILE_UA: &str = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36";
 
 fn listing_kind() -> ListingKind {
 	if settings::get_list_viewer() {
@@ -18,142 +17,165 @@ fn listing_kind() -> ListingKind {
 	}
 }
 
+fn works_key(href: &str) -> Option<String> {
+	Some(works_slug_to_key(href.strip_prefix("/works/")?))
+}
+
 impl Home for Hipmh {
-	/// PicACG-style home: banner (人气榜) + ranked list (本周热门) + scrollers, streamed progressively.
+	/// Mirrors the site's recommendation page (PicACG/copymanga pattern): scrape the
+	/// SSR home HTML into a top banner ImageScroller plus the manga sections.
 	fn get_home(&self) -> Result<HomeLayout> {
-		send_partial_result(&HomePartialResult::Layout(HomeLayout {
-			components: vec![
-				HomeComponent {
-					title: Some("人气榜".into()),
-					subtitle: None,
-					value: HomeComponentValue::empty_big_scroller(),
-				},
-				HomeComponent {
-					title: Some("本周热门".into()),
-					subtitle: None,
-					value: HomeComponentValue::empty_manga_list(),
-				},
-				HomeComponent {
-					title: Some("最新上架".into()),
-					subtitle: None,
-					value: HomeComponentValue::empty_scroller(),
-				},
-				HomeComponent {
-					title: Some("完结".into()),
-					subtitle: None,
-					value: HomeComponentValue::empty_scroller(),
-				},
-				HomeComponent {
-					title: Some("连载".into()),
-					subtitle: None,
-					value: HomeComponentValue::empty_scroller(),
-				},
-			],
-		}));
-
-		// Fetch all five listings concurrently; results come back in request order.
-		let ids = ["popularity", "weekly", "newReleases", "completed", "ongoing"];
-		let mut requests = Vec::with_capacity(ids.len());
-		for id in ids {
-			requests.push(
-				Request::get(listing_url(id, 1)?)?
-					.header("Origin", BASE_URL)
-					.header("Referer", BASE_URL),
-			);
-		}
-		let parsed: Vec<Result<MangaPageResult>> = Request::send_all(requests)
-			.into_iter()
-			.map(|resp| -> Result<MangaPageResult> {
-				let json: serde_json::Value = resp?.get_json()?;
-				parse_manga_list(json, 1)
-			})
-			.collect();
-
+		let doc = Request::get(BASE_URL)?
+			.header("User-Agent", MOBILE_UA)
+			.header("Origin", BASE_URL)
+			.header("Referer", BASE_URL)
+			.html()?;
+		let mut components: Vec<HomeComponent> = Vec::new();
 		let kind = listing_kind();
 
-		if let Some(Ok(r)) = parsed.first()
-			&& !r.entries.is_empty()
-		{
-			send_component(HomeComponent {
-				title: Some("人气榜".into()),
+		// Top sliding banner -> ImageScroller (skip the duplicated clone slides).
+		let banners: Vec<Link> = doc
+			.select(".banner-slide")
+			.map(|slides| {
+				slides
+					.filter_map(|slide| {
+						if slide.has_class("banner-slide-clone") {
+							return None;
+						}
+						let href = slide.select_first("a.banner-link")?.attr("href")?;
+						let key = works_key(&href)?;
+						let image_url = slide
+							.select_first("img.banner-image")
+							.and_then(|i| i.attr("src"))?;
+						let title = slide
+							.select_first("h3.banner-title")
+							.and_then(|t| t.text())
+							.unwrap_or_default();
+						let subtitle = slide
+							.select_first("p.banner-sub-title")
+							.and_then(|t| t.text());
+						Some(Link {
+							title: title.clone(),
+							subtitle,
+							image_url: Some(image_url),
+							value: Some(LinkValue::Manga(Manga {
+								key,
+								title,
+								..Default::default()
+							})),
+						})
+					})
+					.collect()
+			})
+			.unwrap_or_default();
+		if !banners.is_empty() {
+			components.push(HomeComponent {
+				title: None,
 				subtitle: None,
-				value: HomeComponentValue::BigScroller {
-					entries: r.entries.clone(),
-					auto_scroll_interval: Some(8.0),
+				value: HomeComponentValue::ImageScroller {
+					links: banners,
+					auto_scroll_interval: Some(5.0),
+					width: Some(300),
+					height: Some(150),
 				},
 			});
 		}
 
-		if let Some(Ok(r)) = parsed.get(1)
-			&& !r.entries.is_empty()
-		{
-			send_component(HomeComponent {
-				title: Some("本周热门".into()),
-				subtitle: None,
-				value: HomeComponentValue::MangaList {
-					ranking: true,
-					page_size: Some(3),
-					entries: r.entries.clone().into_iter().map(|m| m.into()).collect(),
-					listing: Some(Listing {
-						id: "weekly".into(),
-						name: "本周热门".into(),
-						kind,
-					}),
-				},
-			});
+		// 近期更新: cards carry the title in aria-label.
+		if let Some(section) = doc.select_first(".recent-updates-section") {
+			let entries: Vec<Link> = section
+				.select("a[href^='/works/']")
+				.map(|cards| {
+					cards
+						.filter_map(|a| {
+							let key = works_key(&a.attr("href")?)?;
+							let title = a.attr("aria-label").unwrap_or_default();
+							let cover = a.select_first("img").and_then(|i| i.attr("src"));
+							Some(
+								Manga {
+									key,
+									title,
+									cover,
+									..Default::default()
+								}
+								.into(),
+							)
+						})
+						.collect()
+				})
+				.unwrap_or_default();
+			if !entries.is_empty() {
+				components.push(HomeComponent {
+					title: Some("近期更新".into()),
+					subtitle: None,
+					value: HomeComponentValue::Scroller {
+						entries,
+						listing: None,
+					},
+				});
+			}
 		}
 
-		if let Some(Ok(r)) = parsed.get(2)
-			&& !r.entries.is_empty()
-		{
-			send_component(HomeComponent {
-				title: Some("最新上架".into()),
-				subtitle: None,
-				value: HomeComponentValue::Scroller {
-					entries: r.entries.clone().into_iter().map(|m| m.into()).collect(),
-					listing: Some(Listing {
-						id: "newReleases".into(),
-						name: "最新上架".into(),
-						kind,
-					}),
-				},
-			});
+		// Remaining sections in site order; map each heading to its listing.
+		if let Some(sections) = doc.select(".manga-section") {
+			for section in sections {
+				let heading = section
+					.select_first("h2")
+					.and_then(|h| h.text())
+					.unwrap_or_default();
+				let listing = match heading.trim() {
+					"本週熱門" => Some(("weekly", "本週熱門")),
+					"人氣排名" => Some(("popularity", "人氣排名")),
+					"高分韓漫" => Some(("highScoreKorean", "高分韓漫")),
+					"最新上架" => Some(("newReleases", "最新上架")),
+					"完結推薦" => Some(("completed", "完結推薦")),
+					_ => None,
+				};
+				let entries: Vec<Link> = section
+					.select("a.manga-card-link")
+					.map(|cards| {
+						cards
+							.filter_map(|a| {
+								let key = works_key(&a.attr("href")?)?;
+								let title = a
+									.select_first("h3.manga-card-title")
+									.and_then(|t| t.text())
+									.or_else(|| a.attr("aria-label"))
+									.unwrap_or_default();
+								let cover = a
+									.select_first("img.manga-card-image")
+									.and_then(|i| i.attr("src"));
+								Some(
+									Manga {
+										key,
+										title,
+										cover,
+										..Default::default()
+									}
+									.into(),
+								)
+							})
+							.collect()
+					})
+					.unwrap_or_default();
+				if entries.is_empty() {
+					continue;
+				}
+				components.push(HomeComponent {
+					title: Some(heading.clone()),
+					subtitle: None,
+					value: HomeComponentValue::Scroller {
+						entries,
+						listing: listing.map(|(id, name)| Listing {
+							id: id.into(),
+							name: name.into(),
+							kind,
+						}),
+					},
+				});
+			}
 		}
 
-		if let Some(Ok(r)) = parsed.get(3)
-			&& !r.entries.is_empty()
-		{
-			send_component(HomeComponent {
-				title: Some("完结".into()),
-				subtitle: None,
-				value: HomeComponentValue::Scroller {
-					entries: r.entries.clone().into_iter().map(|m| m.into()).collect(),
-					listing: Some(Listing {
-						id: "completed".into(),
-						name: "完结".into(),
-						kind,
-					}),
-				},
-			});
-		}
-
-		if let Some(Ok(r)) = parsed.get(4)
-			&& !r.entries.is_empty()
-		{
-			send_component(HomeComponent {
-				title: Some("连载".into()),
-				subtitle: None,
-				value: HomeComponentValue::Scroller {
-					entries: r.entries.clone().into_iter().map(|m| m.into()).collect(),
-					listing: Some(Listing {
-						id: "ongoing".into(),
-						name: "连载".into(),
-						kind,
-					}),
-				},
-			});
-		}
-
-		Ok(HomeLayout::default())
+		Ok(HomeLayout { components })
 	}
 }

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Aidoku Chinese manga source collection. Each source is its **own crate** in its own directory under `sources/{source-id}/` (mirroring [Aidoku-Community/sources](https://github.com/Aidoku-Community/sources)) so different sources don't mix. Currently hosts:
 
-- **`zh.hipmh`** — 嬉皮漫画 (https://m.hipmh.com). Based on the `zh.happymh` source from Aidoku-Community, adapted for hipmh.com; uses the redesigned site's `/v1/*` JSON APIs.
+- **`zh.hipmh`** — 嬉皮漫画 (https://m.hipmh.com). Based on the `zh.happymh` source from Aidoku-Community, adapted for hipmh.com; uses the redesigned site's `/v1/*` JSON APIs and a `Home` layout that mirrors the site's recommendation page (v11).
 - **`zh.bilimanga`** — 嗶哩漫畫 (https://www.bilimanga.net). Copied from Aidoku-Community; pure HTML scraper.
 
 Each source ships its own `package.aix` (a zip with `Payload/main.wasm` + `res/*`) and pins its **own aidoku-rs git rev** via its committed `Cargo.lock` — the two crates currently use different revs (`zh.hipmh` → `1a6bb691`, `zh.bilimanga` → `b0818704`), so they must stay separate crates and never be merged into one.
@@ -36,15 +36,17 @@ Both scripts iterate `sources/*/` — for each source: `(cd "$src" && cargo +nig
 
 **Cargo.lock:** each source's `Cargo.lock` is **committed** (`.gitignore` has `!sources/*/Cargo.lock`) to pin its aidoku-rs rev — without the pin, a fresh `cargo build` resolves aidoku-rs to master HEAD, which may not compile the source. Bump a lock deliberately (e.g. `cd sources/<id> && cargo update -p aidoku`).
 
-`aidoku-test` is declared in `[dev-dependencies]`, but **no tests exist yet** — don't assume a test suite that isn't there.
+`aidoku-test` is declared in `[dev-dependencies]`; `#[aidoku_test]` tests exist in `src/lib.rs` and `src/json/chapter_list/mod.rs` (run via `cargo +nightly test`, needs `aidoku-test-runner`). They exercise the live APIs, so they require network.
 
 ## Architecture — zh.hipmh (API + HTML hybrid)
 
-Implements the Aidoku trait-based API (Aidoku 0.7+), registered via `register_source!` at the bottom of `sources/zh.hipmh/src/lib.rs`. The `Hipmh` struct implements `Source` (search, manga update, page list), `ImageRequestProvider` (adds `Referer` header), `DeepLinkHandler` (URL parsing), and `ListingProvider` (catalog via the `/v1/mangas` JSON API).
+Implements the Aidoku trait-based API (Aidoku 0.7+), registered via `register_source!` at the bottom of `sources/zh.hipmh/src/lib.rs`. The `Hipmh` struct implements `Source` (search, manga update, page list), `ImageRequestProvider` (adds `Referer` header), `DeepLinkHandler` (URL parsing), `ListingProvider` (catalog via the `/v1/mangas` JSON API), and `Home` (scrapes the site home HTML into a banner + section layout, v11).
 
 ```
 sources/zh.hipmh/src/
 ├── lib.rs                    # Source traits, search/browse/listing via /v1 APIs, deep links, BASE_URL
+├── home.rs                   # Home: scrape site home HTML -> banner ImageScroller + manga sections
+├── settings.rs               # isListView segment reader (grid/list)
 ├── html/mod.rs               # HTML scraper: /works/ detail parsing
 └── json/
     ├── chapter_list/mod.rs   # Chapter list via /v1/manga/chapters API
@@ -74,13 +76,17 @@ sources/zh.hipmh/src/
 | Image decode | Pure char transform (no crypto) | **Working** (`decode_images` in `sources/zh.hipmh/src/json/page_list.rs`, verified byte-for-byte against `reader.hipmh.top/assets/runtime/chapter-decoder.js`). Strip prefix `qM9` + suffix `Z7` → inner. `total = len(inner)-5`; `k_len = total/3`, `a_len = (total-k_len)/2`, `b_len = total-k_len-a_len`. Layout `A + "Vx" + B + "pL0" + K`; recombine as `K + A + B`. Split into 7-char chunks, reverse every odd chunk (idx%2). Substitute chars FROM = `_-9876543210...Z` → TO = `ABC...-_` (scrambled→standard url-safe base64 alphabet). Url-safe base64 (no padding) → UTF-8 JSON array of relative `/i/...` paths. Image host = `https://hip-tx-1.s3imgs.top` (fixed, see "Image CDN line" below), `Referer: https://m.hipmh.com/` |
 | Image CDN line | `data.line` → host (v9) | **`data.line` is NOT a host number.** The site's reader (`_ChapterHidPage` JS) always serves from a fixed host; the only special case is `line === 9`, which switches to the "secure" `https://hip-tx-s1.s3imgs.top`. The old `https://hip-tx-{line}.s3imgs.top` mapping broke line=3 chapters (从大树开始进化 etc.) — `hip-tx-{n}` only exists for n ∈ {1,2}, so `hip-tx-3.s3imgs.top` is NXDOMAIN. Implemented as `image_base(line)` in `page_list.rs` |
 
-**Current status:** catalog, manga detail, chapter list, search, and **page images** all work. The image decoder is fully reverse-engineered and implemented in Rust (`sources/zh.hipmh/src/json/page_list.rs`).
+**Current status:** catalog, manga detail, chapter list, search, **page images**, and the **home layout** (v11, mirrors the recommendation page) all work. The image decoder is fully reverse-engineered and implemented in Rust (`sources/zh.hipmh/src/json/page_list.rs`).
 
 ### hipmh Key Logic
 
+**Home layout (v11, `src/home.rs`)** — Mirrors the site's recommendation page by scraping the SSR home HTML (`GET https://m.hipmh.com/`, mobile UA), copymanga-style, returning a populated `HomeLayout`. Top sliding banner → `ImageScroller` from `.banner-slide` (skip `.banner-slide-clone`): `a.banner-link` href, `img.banner-image` src, `h3.banner-title`, `p.banner-sub-title`. Then 近期更新 (`.recent-updates-section`, title in `aria-label`) and the `.manga-section` blocks in site order — 本週熱門/人氣排名/高分韓漫/最新上架/完結推薦 — each a `Scroller` of `a.manga-card-link` (`h3.manga-card-title`, `img.manga-card-image`). Headings map to listings (weekly/popularity/highScoreKorean/newReleases/completed); 近期更新 has no "see all". Each listing's `kind` follows `isListView`.
+
+**Grid/list view (`src/settings.rs`, `res/settings.json`)** — the `isListView` segment (网格/列表) sets `ListingKind::Default` vs `List`. Aidoku stores a segment as the selected **Int index**, so read `defaults_get::<i32>("isListView") == 1` — not `::<bool>` (PicACG's bool read is a latent bug that always yields grid).
+
 **Search + browse (`lib.rs` `get_search_manga_list`)** — A text filter is treated as a search query (via `/v1/search?q=...&page=&page_size=20`). With no query, browse filters map to `/v1/mangas` — only the 状态 filter works (`status=ongoing|completed`); 类型/地区 need numeric IDs the API doesn't expose, so they're skipped.
 
-**Catalog listings (`lib.rs` `ListingProvider`)** — All five listings (人气榜/本周热门/最新上架/完结/连载) call `/v1/mangas` with `sort`/`status` params. `parse_manga_list` (shared with search) handles both `data.items` (listings, item `mid`) and `data.data` (search, item `id`) shapes. Manga keys come from the `/works/` slug via `works_slug_to_key` (base64-decode the leading segment → `m:23475`). Covers are relative and get prefixed with `https://cover.s3imgs.top`. `has_next_page = page < total_pages`.
+**Catalog listings (`lib.rs` `ListingProvider`)** — The listings (人气榜/本周热门/最新上架/完结/连载, plus 高分韩漫 `highScoreKorean` for the home "see all") call `/v1/mangas` with `sort`/`status`/`tag` params (高分韩漫 = `tag=69`). `parse_manga_list` (shared with search) handles both `data.items` (listings, item `mid`) and `data.data` (search, item `id`) shapes. Manga keys come from the `/works/` slug via `works_slug_to_key` (base64-decode the leading segment → `m:23475`). Covers are relative and get prefixed with `https://cover.s3imgs.top`. `has_next_page = page < total_pages`.
 
 **Chapter list (`sources/zh.hipmh/src/json/chapter_list/mod.rs`)** — Calls `/v1/manga/chapters` with `mid` (numeric id, `m:` prefix stripped from the key), `order=desc` (newest first). **The API caps `per_page` at 50** (hard cap — tested up to 1000; no other param raises it), so a long manga spans many pages. Page 1 is fetched first to learn `total_pages`, then the remaining pages are fetched **concurrently via `Request::send_all`** (results come back in request order, so newest-first is preserved). `send_all` is safe on iOS: the AidokuRunner runtime (rev pinned in Package.resolved) registers/implement it; the app's `Shared/Wasm/Imports/WasmNet.swift` (only `send`) is dead code not instantiated. `RateLimit` defaults to disabled (`permits=0`), so no throttling. Chapter `key` is the item's `hid`; `url` is `/chapter/go?hid={hid}&m={mid}`.
 
@@ -127,10 +133,10 @@ Each built `sources/{id}/package.aix` is versioned into `public/` (`public/sourc
 
 **Distribution entry point is `raw.githubusercontent.com`**, not GitHub Pages:
 - Source list URL: `https://raw.githubusercontent.com/doyayaa/aidoku-source-zh/gh-pages/index.min.json`
-- `iconURL` and `downloadURL` MUST be **relative** paths (`icons/zh.hipmh-v8.png`, `sources/zh.bilimanga-v4.aix`) resolved against the source-list URL. **Absolute URLs break import in Aidoku** (verified by user on 2026-08-12) — do not use absolute paths for these fields.
+- `iconURL` and `downloadURL` MUST be **relative** paths (`icons/zh.hipmh-v11.png`, `sources/zh.bilimanga-v4.aix`) resolved against the source-list URL. **Absolute URLs break import in Aidoku** (verified by user on 2026-08-12) — do not use absolute paths for these fields.
 - GitHub Pages is NOT used: the repo's custom domain `doyayaa.online` is deprecated, and `doyayaa.github.io/...` still 301s to it (can't be cleared via API; needs web UI Settings → Pages → Custom domain → Clear if ever re-enabled).
 
-**The manifest MUST be the new `{"name": ..., "sources": [...]}` format** (fields `iconURL`/`downloadURL`/`languages`/`contentRating`/`baseURL`/`minAppVersion`). The old flat-array format (`file`/`icon`/`lang`/`nsfw`) causes Aidoku to label the whole source list "旧版图源" (legacy). Keep `public/` and the `gh-pages` branch in sync. The hipmh `iconURL` is an absolute remote URL (`https://m.hipmh.com/assets/logo.C1THqItK.png`, the site's logo); `public/icons/zh.hipmh-v1.png` is a legacy local copy no longer referenced.
+**The manifest MUST be the new `{"name": ..., "sources": [...]}` format** (fields `iconURL`/`downloadURL`/`languages`/`contentRating`/`baseURL`/`minAppVersion`). The old flat-array format (`file`/`icon`/`lang`/`nsfw`) causes Aidoku to label the whole source list "旧版图源" (legacy). Keep `public/` and the `gh-pages` branch in sync. The hipmh `iconURL` is a **relative** local path (`icons/zh.hipmh-v11.png`); `public/icons/zh.hipmh-v1.png` is a legacy local copy no longer referenced.
 
 ## Key Dependencies
 

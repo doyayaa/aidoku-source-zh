@@ -22,8 +22,10 @@ https://raw.githubusercontent.com/doyayaa/aidoku-source-zh/gh-pages/index.min.js
 
 | 图源 | 版本 | 说明 |
 |------|------|------|
-| [嬉皮漫画](https://m.hipmh.com) | v8 | 基于站点 `/v1` JSON API；分类、搜索、章节、阅读均可用 |
+| [嬉皮漫画](https://m.hipmh.com) | v11 | 基于站点 `/v1` JSON API；首页镜像网站推荐页（顶部滑动+各板块）、分类、搜索、章节、阅读均可用 |
 | [嗶哩漫畫](https://www.bilimanga.net) | v4 | HTML 解析；分类/浏览、章节、阅读可用；搜索受站点 Cloudflare 限制 |
+
+> **嬉皮漫画首页（v11）**：镜像网站推荐页——顶部滑动推荐，及近期更新、本周热门、人气排名、高分韩漫、最新上架、完结推荐板块；图源设置中"主页详情视图"可切换网格/列表。
 
 > **嗶哩漫畫搜索说明**：站点已将搜索改为前端 JS + Cloudflare 保护，非浏览器请求直接返回空页。图源内搜索可能显示无结果，是否可用取决于网络环境（家用 IP / Aidoku 网络栈可能通过）。
 
